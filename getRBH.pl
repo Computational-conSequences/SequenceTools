@@ -31,7 +31,9 @@ my $cov1       = 50;
 my $cov2       = 99;
 my $defCov     = 60;
 my $defAln     = "F";
-my $defPW      = 'blastp';
+my $defPW      = 'diamond';
+my $minmmseqs  = 1;
+my $maxmmseqs  = 7;
 ###### assignable:
 my @queries    = ();
 my @against    = ();
@@ -84,12 +86,13 @@ my $podUsage
     . qq(=item B<-p>\n\n)
     . qq(program for pairwise comparisons [$matchProg], default: $defPW\n\n)
     . qq(=item B<-s>\n\n)
-    . qq(sensitivity (only works for diamond), default '$sensitive':\n\n)
+    . qq(sensitivity (only works for diamond and mmseqs), default '$sensitive':\n\n)
     . qq(=over\n\n)
-    . qq(=item B<F:>\n\nfast, low sensitivity\n\n)
-    . qq(=item B<S:>\n\nsensitive mode\n\n)
-    . qq(=item B<X:>\n\nmore sensitive mode\n\n)
+    . qq(=item B<F:>\n\nlow sensitivity: diamond: fast, mmseqs: -s 1\n\n)
+    . qq(=item B<S:>\n\nmedium sensitivity: diamond: sensitive, mmseqs: -s 4\n\n)
+    . qq(=item B<X:>\n\nhigh sensitivity: diamond: more-sensitive, mmseqs: -s 5.7\n\n)
     . qq(=back\n\n)
+    . qq(for mmseqs the option will also accept numbers between $minmmseqs and $maxmmseqs\n\n)
     . qq(=item B<-m>\n\n)
     . qq(directory for $matchProg results, default compRuns.\n\n)
     . qq(=item B<-c>\n\n)
@@ -202,15 +205,30 @@ if( $pwProg eq "lastal" && $alnSeqs eq "T" ) {
     die "$help";
 }
 print "will compare proteins with $pwProg\n";
-my $sensitive = $sensitive =~ m{^(F|S|X)$}i ? uc($1) : 'S';
 my $dmdmode = '';
 if( $pwProg eq "diamond" ) {
+    $sensitive = $sensitive =~ m{^(F|S|X)$}i ? uc($1) : 'S';
     $dmdmode
         = $sensitive eq 'F' ? "fast"
         : $sensitive eq 'S' ? "sensitive"
         : $sensitive eq 'X' ? "more-sensitive"
-        : 'na';
+        : 'sensitive';
     print "will run diamond in '$dmdmode' mode\n";
+}
+my $msmode = '';
+if( $pwProg eq "mmseqs" ) {
+    $sensitive
+        = $sensitive =~ m{^(F|S|X)$}i ? uc($1)
+        : ( $sensitive >= $minmmseqs ) && ( $sensitive <= $maxmmseqs ) ? $sensitive
+        : 'S';
+    print "testing $sensitive<-sensitive\n";
+    $msmode
+        = $sensitive eq 'F' ? "-s 1"
+        : $sensitive eq 'S' ? "-s 4"
+        : $sensitive eq 'X' ? "-s 5.7"
+        : ( $sensitive >= $minmmseqs ) && ( $sensitive <= $maxmmseqs ) ? "-s $sensitive"
+        : '-s 4';
+    print "will run mmseqs in '$msmode' mode\n";
 }
 my $minCov = $minCov >= $cov1 && $minCov <= $cov2 ? $minCov : $defCov;
 print "minimum coverage of shortest sequence: $minCov\n";
@@ -342,6 +360,10 @@ my $mmseqsOptions
     . qq( --comp-bias-corr 0 )
     . qq( --threads $cpus )
     . qq( --format-output "$mmfields" );
+if( $msmode =~ m{s\s+\d} ) {
+    $mmseqsOptions = qq( $msmode ) . $mmseqsOptions;
+}
+
 
 #############################################################
 ################# running the RBH comparisons ###############
