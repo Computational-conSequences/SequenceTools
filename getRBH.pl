@@ -15,6 +15,9 @@ my $parser = Pod::Text->new (sentence => 0, width => $width, margin => 1);
 
 my $ownName = $0;
 $ownName =~ s{.*/}{};
+my $system = qx(uname -s);
+chomp($system);
+my $time = $system eq 'Darwin' ? '/usr/bin/time -p' : 'time -p';
 
 my %url = (
     "blastp"  => 'ftp://ftp.ncbi.nlm.nih.gov/blast/executables/LATEST/',
@@ -34,6 +37,9 @@ my $defAln     = "F";
 my $defPW      = 'diamond';
 my $minmmseqs  = 1;
 my $maxmmseqs  = 7;
+my $diamondS   = 'M';
+my $mmseqsS    = '5.7';
+my $diamonV    = "2.0.1";
 ###### assignable:
 my @queries    = ();
 my @against    = ();
@@ -45,10 +51,10 @@ my $maxEvalue  = 1e-6;
 my $alnSeqs    = $defAln;
 my $pwProg     = $defPW;
 my $pwDir      = "compRuns";
-my $sensitive  = 'S';
+my $sensitive  = '';
 my $runRBH     = "T";
 my $keepold    = 'T';
-my $cpus       = 1;
+#my $cpus       = 1;
 my $topMatch   = 0;
 my $minTop     = 50; # 30 was enough for lastsl in one example
 my $matchRatio = 7;
@@ -60,6 +66,7 @@ my $cpu_count
     : qx(sysctl -a 2>/dev/null | grep 'max-threads')
     =~ m{\.max-threads\s+=\s+(\d+)} ? $1
     : 1;
+my $cpus = $cpu_count >= 4 ? 4 : 1;
 
 my $podUsage
     = qq(=pod\n\n)
@@ -86,13 +93,16 @@ my $podUsage
     . qq(=item B<-p>\n\n)
     . qq(program for pairwise comparisons [$matchProg], default: $defPW\n\n)
     . qq(=item B<-s>\n\n)
-    . qq(sensitivity (only works for diamond and mmseqs), default '$sensitive':\n\n)
+    . qq(sensitivity (only works for diamond and mmseqs):\n\n)
     . qq(=over\n\n)
     . qq(=item B<F:>\n\nlow sensitivity: diamond: fast, mmseqs: -s 1\n\n)
-    . qq(=item B<S:>\n\nmedium sensitivity: diamond: sensitive, mmseqs: -s 4\n\n)
-    . qq(=item B<X:>\n\nhigh sensitivity: diamond: more-sensitive, mmseqs: -s 5.7\n\n)
+    . qq(=item B<S:>\n\ndiamond: sensitive, mmseqs: -s 2\n\n)
+    . qq(=item B<M:>\n\ndiamond: more-sensitive, mmseqs: -s 4\n\n)
+    . qq(=item B<V:>\n\ndiamond: very-sensitive, mmseqs: -s 5.7\n\n)
+    . qq(=item B<U:>\n\nhighest sensitivity: diamond: ultra-sensitive, mmseqs: -s $maxmmseqs\n\n)
     . qq(=back\n\n)
-    . qq(for mmseqs the option will also accept numbers between $minmmseqs and $maxmmseqs\n\n)
+    . qq(for mmseqs the option will also accept numbers between $minmmseqs and $maxmmseqs,\n)
+    . qq(defaults: diamond: $diamondS; mmseqs: $mmseqsS\n\n)
     . qq(=item B<-m>\n\n)
     . qq(directory for $matchProg results, default compRuns.\n\n)
     . qq(=item B<-c>\n\n)
@@ -207,27 +217,31 @@ if( $pwProg eq "lastal" && $alnSeqs eq "T" ) {
 print "will compare proteins with $pwProg\n";
 my $dmdmode = '';
 if( $pwProg eq "diamond" ) {
-    $sensitive = $sensitive =~ m{^(F|S|X)$}i ? uc($1) : 'S';
+    $sensitive = $sensitive =~ m{^(F|S|M|V|U)$}i ? uc($1) : $diamondS;
     $dmdmode
         = $sensitive eq 'F' ? "fast"
         : $sensitive eq 'S' ? "sensitive"
-        : $sensitive eq 'X' ? "more-sensitive"
-        : 'sensitive';
+        : $sensitive eq 'M' ? "more-sensitive"
+        : $sensitive eq 'V' ? "very-sensitive"
+        : $sensitive eq 'U' ? "ultra-sensitive"
+        : 'more-sensitive';
     print "will run diamond in '$dmdmode' mode\n";
 }
 my $msmode = '';
 if( $pwProg eq "mmseqs" ) {
     $sensitive
-        = $sensitive =~ m{^(F|S|X)$}i ? uc($1)
+        = $sensitive =~ m{^(F|S|M|V|U)$}i ? uc($1)
         : ( $sensitive >= $minmmseqs ) && ( $sensitive <= $maxmmseqs ) ? $sensitive
-        : 'S';
+        : $mmseqsS;
     print "testing $sensitive<-sensitive\n";
     $msmode
         = $sensitive eq 'F' ? "-s 1"
-        : $sensitive eq 'S' ? "-s 4"
-        : $sensitive eq 'X' ? "-s 5.7"
+        : $sensitive eq 'S' ? "-s 2"
+        : $sensitive eq 'M' ? "-s 4"
+        : $sensitive eq 'V' ? "-s 5.7"
+        : $sensitive eq 'U' ? "-s $maxmmseqs"
         : ( $sensitive >= $minmmseqs ) && ( $sensitive <= $maxmmseqs ) ? "-s $sensitive"
-        : '-s 4';
+        : '-s $mmseqsS';
     print "will run mmseqs in '$msmode' mode\n";
 }
 my $minCov = $minCov >= $cov1 && $minCov <= $cov2 ? $minCov : $defCov;
@@ -237,8 +251,11 @@ my $maxOverlap
     ? $maxOverlap : 0.1;
 print "maximum overlap for fusions: $maxOverlap\n";
 my $alnSeqs = $alnSeqs =~ m{^(T|F)$}i ? uc($1) : $defAln;
-print "include aligned seqs in blast results: $alnSeqs\n";
-my $cpus = $cpus > 0 && $cpus <= $cpu_count ? $cpus : 1;
+print "include aligned seqs in $pwProg results: $alnSeqs\n";
+my $cpus
+    = $cpus > 0 && $cpus <= $cpu_count ? $cpus
+    : $cpu_count >= 4 ? 4
+    : 1;
 print "uing $cpus cpu threads\n";
 my $runRBH = $runRBH =~ m{^(T|F)$}i ? uc($1) : 'T';
 if( $runRBH eq 'F' ) {
@@ -261,7 +278,7 @@ else {
 #### temporary working directory:
 my $tempFolder = tempdir("/tmp/$ownName.XXXXXXXXXXXX");
 
-##### headingd for pairwise comparisons:
+##### heading for pairwise comparisons:
 my @pwHeading = qw(
                       Query
                       Target
@@ -368,7 +385,10 @@ if( $msmode =~ m{s\s+\d} ) {
 #############################################################
 ################# running the RBH comparisons ###############
 #############################################################
-my $maxKeep  = 30;
+my $saveLog = "$pwDir/Logs/" . nakedName($queries[0]) . ".log";
+my $tmpLog  = "$tempFolder/log";
+open( my $LOG,">","$tmpLog" );
+my $maxKeep  = 10;
 my $kept     = 0;
 if( $allvsall > 0 ) {
     ##### by running these in reverse we ensure that
@@ -392,7 +412,7 @@ if( $allvsall > 0 ) {
             }
             $kept++;
             if( $kept >= $maxKeep  ) {
-                system "rm -r $tempFolder/* &>/dev/null";
+                cleanTMP();
                 $kept = 0;
             }
         }
@@ -420,12 +440,15 @@ else {
             }
             $kept++;
             if( $kept >= $maxKeep  ) {
-                system "rm -r $tempFolder/* &>/dev/null";
+                cleanTMP();
                 $kept = 0;
             }
         }
     }
 }
+close($LOG);
+#### save logfile
+saveLog();
 ##############################################################
 ######### finish
 ##############################################################
@@ -441,14 +464,16 @@ print "      Done with $ownName!\n\n";
 
 sub runPairWise {
     my($faaQuery,$faaTarget,$maxAlns) = @_;
-    my $queryGnm   = nakedName($faaQuery);
+    my $queryGnm  = nakedName($faaQuery);
     my $targetGnm = nakedName($faaTarget);
-    my $pwDB       = $tempFolder . "/$targetGnm";
-    my $alnFile    = $pwDir . "/$queryGnm/$targetGnm." . $pwProg . ".bz2";
+    my $pwDB      = $tempFolder . "/$targetGnm";
+    my $alnFile   = $pwDir . "/$queryGnm/$targetGnm." . $pwProg . ".bz2";
+    print {$LOG} "working with $queryGnm and $targetGnm\n";
     ### check if we have pairwise comparison results
     ### decide if this should run
     if( -f "$alnFile" && $keepold =~ m{T|R}) {
         print "we already have an alignment file:\n $alnFile\n";
+        print {$LOG} "we already have an alignment file:\n $alnFile\n";
     }
     else {
         print "comparing sequences with $pwProg\n";
@@ -498,9 +523,7 @@ sub buildNrunRBH {
         my %pair_bitsc  = (); # capture bit score
         my %pair_Evalue = (); # capture E-value
         my %pair_line   = (); # capture line
-        my %ident_bitsc = (); # capture bit score for identical proteins
-        my %ident_qline = (); # capture line for identical proteins
-        my %ident_tline = (); # capture line for identical proteins
+        my %identStats  = (); # capture stats for identical proteins
         ##### open original homologs
         open( my $IN,"-|","bzip2 -qdc $alnFile" );
       HOMOLOGLINE:
@@ -514,36 +537,33 @@ sub buildNrunRBH {
                 $sstart,$send,$slen,
                 $qalnseq,$salnseq
             ) = split;
-            $query   = cleanID("$query");
+            $query  = cleanID("$query");
             $target = cleanID("$target");
             ## percent coverages
             my $qcov = calcCoverage($qstart,$qend,$qlen);
             my $scov = calcCoverage($sstart,$send,$slen);
             if( ( $qcov >= $minCov ) || ( $scov >= $minCov ) ) {
+                my $pairF = join("\t",$query,$target);
+                my $pairR = join("\t",$target,$query);
                 my $stats = join("\t",
                                  $evalue,$bitscore,
                                  $qstart,$qend,$qcov,
                                  $sstart,$send,$scov
                              );
-                if( ( $qlen eq $slen )
-                        && ( $pident >= 100 )
-                        && ( $qend   eq $qlen )
-                        && ( $qstart eq $sstart )
-                        && ( $qend   eq $send )
-                        && ( $bitscore > $ident_bitsc{"$query"} ) ) {
-                    $ident_bitsc{"$query"} = $bitscore;
-                    $ident_qline{"$query"}
-                        = join("\t",$query,$target,$stats);
-                    $ident_tline{"$target"}
-                        = join("\t",$target,$query,$stats);
+                ######## are these identical?
+                if( ( $pident >= 100 )
+                        && ( $qcov >= 100 )
+                        && ( $scov >= 100 ) ) {
+                    $identStats{"$pairF"} = $stats;
+                    $identStats{"$pairR"} = $stats;
                 }
-                my $pair = join("::",$query,$target);
-                if( $bitscore > $pair_bitsc{"$pair"} ) {
-                    $pair_line{"$pair"}   = join("\t",$query,$target,$stats);
-                    $pair_query{"$pair"}  = $query;
-                    $pair_target{"$pair"} = $target;
-                    $pair_bitsc{"$pair"}  = $bitscore;
-                    $pair_Evalue{"$pair"} = $evalue;
+                if( $bitscore > $pair_bitsc{"$pairF"} ) {
+                    $pair_line{"$pairF"}
+                        = join("\t",$query,$target,$stats);
+                    $pair_query{"$pairF"}  = $query;
+                    $pair_target{"$pairF"} = $target;
+                    $pair_bitsc{"$pairF"}  = $bitscore;
+                    $pair_Evalue{"$pairF"} = $evalue;
                 }
             }
         }
@@ -565,38 +585,42 @@ sub buildNrunRBH {
         }
         #### now sort reciprocals
         my @reciprocal_lines = ();
-        my @pretend_reciprocal
-            = sort {
-                $pair_bitsc{"$b"} <=> $pair_bitsc{"$a"}
-                    || $pair_Evalue{"$a"} <=> $pair_Evalue{"$b"}
-                    || $pair_target{"$a"} <=> $pair_target{"$b"}
-                    || $pair_target{"$a"} cmp $pair_target{"$b"}
-                    || $pair_query{"$a"}  <=> $pair_query{"$b"}
-                    || $pair_query{"$a"}  cmp $pair_query{"$b"}
-                } keys %pair_query;
-        for my $pair ( @pretend_reciprocal ) {
-            my (
-                $query,$target,
-                $evalue,$bit_score,
-                $q_start,$q_end,$qcov,
-                $s_start,$s_end,$scov
-            ) = split(/\t/,$pair_line{"$pair"});
-            my $oppLine = join("\t",
-                               $target,$query,
-                               $evalue,$bit_score,
-                               $s_start,$s_end,$scov,
-                               $q_start,$q_end,$qcov
-                           );
-            push(@reciprocal_lines,$oppLine);
+        if( "$queryGnm" eq "$targetGnm" ) {
+            push(@reciprocal_lines,@query_lines);
+        }
+        else {
+            print "   learning reciprocals\n";
+            my @pretend_reciprocal
+                = sort {
+                    $pair_bitsc{"$b"} <=> $pair_bitsc{"$a"}
+                        || $pair_Evalue{"$a"} <=> $pair_Evalue{"$b"}
+                        || $pair_target{"$a"} <=> $pair_target{"$b"}
+                        || $pair_target{"$a"} cmp $pair_target{"$b"}
+                        || $pair_query{"$a"}  <=> $pair_query{"$b"}
+                        || $pair_query{"$a"}  cmp $pair_query{"$b"}
+                    } keys %pair_query;
+            for my $pair ( @pretend_reciprocal ) {
+                my (
+                    $query,$target,
+                    $evalue,$bit_score,
+                    $q_start,$q_end,$qcov,
+                    $s_start,$s_end,$scov
+                ) = split(/\t/,$pair_line{"$pair"});
+                my $oppLine = join("\t",
+                                   $target,$query,
+                                   $evalue,$bit_score,
+                                   $s_start,$s_end,$scov,
+                                   $q_start,$q_end,$qcov
+                               );
+                push(@reciprocal_lines,$oppLine);
+            }
         }
         ###### now orthology
-        ### directories for RBHs:
-        my $tmpQuery  = $tempFolder . "/$queryGnm.$targetGnm.rbh.bz2";
-        my $tmpTarget = $tempFolder . "/$targetGnm.$queryGnm.rbh.bz2";
         print "   extracting orthologs\n";
         ###### making this into a subroutine to allow working both ways:
+        my $tmpQuery  = $tempFolder . "/$queryGnm.$targetGnm.rbh.bz2";
         produceRBH($tmpQuery,\@query_lines,\@reciprocal_lines,
-                   \%ident_qline,\%ident_tline);
+                   \%identStats);
         if( -s "$tmpQuery" ) {
             for my $checkDir ( "$rbhDir","$qRBHdir" ) {
                 unless( -d "$checkDir" ) {
@@ -605,21 +629,24 @@ sub buildNrunRBH {
             }
             system( "mv $tmpQuery $qRBHfile 2>/dev/null" );
         }
-        produceRBH($tmpTarget,\@reciprocal_lines,\@query_lines,
-                   \%ident_tline,\%ident_qline);
-        if( -s "$tmpTarget" ) {
-            for my $checkDir ( "$rbhDir","$tRBHdir" ) {
-                unless( -d "$checkDir" ) {
-                    mkdir("$checkDir");
+        if( "$queryGnm" ne "$targetGnm" ) {
+            my $tmpTarget = $tempFolder . "/$targetGnm.$queryGnm.rbh.bz2";
+            produceRBH($tmpTarget,\@reciprocal_lines,\@query_lines,
+                       \%identStats);
+            if( -s "$tmpTarget" ) {
+                for my $checkDir ( "$rbhDir","$tRBHdir" ) {
+                    unless( -d "$checkDir" ) {
+                        mkdir("$checkDir");
+                    }
                 }
+                system( "mv $tmpTarget $tRBHfile 2>/dev/null" );
             }
-            system( "mv $tmpTarget $tRBHfile 2>/dev/null" );
         }
     }
 }
 
 sub produceRBH {
-    my ($outFile,$rqLines,$rsLines,$ridentLnQ,$ridentLnS) = @_;
+    my ($outFile,$rqLines,$rsLines,$ridentStats) = @_;
     my $tmpFile = $outFile . ".tmp";
     my %query_best_hits = ();
     my %query_bitsc     = ();
@@ -627,47 +654,47 @@ sub produceRBH {
     my %init_target     = ();
     my %end_target      = ();
     my %print_line      = ();
-  QLINE:
     for my $line ( @{$rqLines} ) {
-        my ( $query,$target,$evalue,$bit_score,
+        my ( $query,$target,
+             $evalue,$bit_score,
              $q_start,$q_end,$qcov,
              $s_start,$s_end,$scov
          ) = split(/\s+/,$line);
-        next QLINE if( exists $ridentLnQ->{"$query"} ); ### jump identicals
+        my $pair = join("\t",$query,$target);
         my $print_line = join("\t",
-                              $query,$target,
+                              $pair,
                               $evalue,$bit_score,
                               $q_start,$q_end,$qcov,
                               $s_start,$s_end,$scov
                           );
         if( length($query_best_hits{"$query"}) > 0 ) {
             if( $query_bitsc{"$query"} == $bit_score ) {
-                $query_best_hits{"$query"}    .= "," . $target;
-                $print_line{"$query.$target"}  = $print_line;
-                $init_target{"$query.$target"} = $s_start;
-                $end_target{"$query.$target"}  = $s_end;
+                $query_best_hits{"$query"} .= "," . $target;
+                $print_line{"$pair"}        = $print_line;
+                $init_target{"$pair"}       = $s_start;
+                $end_target{"$pair"}        = $s_end;
             }
         }
         else {
-            $query_best_hits{"$query"}     = $target;
-            $print_line{"$query.$target"}  = $print_line;
-            $init_target{"$query.$target"} = $s_start;
-            $end_target{"$query.$target"}  = $s_end;
-            $query_bitsc{"$query"}         = $bit_score;
-            $query_E_value{"$query"}       = $evalue;
+            $query_best_hits{"$query"} = $target;
+            $print_line{"$pair"}       = $print_line;
+            $init_target{"$pair"}      = $s_start;
+            $end_target{"$pair"}       = $s_end;
+            $query_bitsc{"$query"}     = $bit_score;
+            $query_E_value{"$query"}   = $evalue;
         }
     }
     #####
     my %target_best_hits = ();
     my %target_bitsc     = ();
     my %target_E_value   = ();
-  SLINE:
     for my $line ( @{$rsLines} ) {
-        my ( $query,$target,$evalue,$bit_score,
+        my ( $query,$target,
+             $evalue,$bit_score,
              $q_start,$q_end,$qcov,
              $s_start,$s_end,$scov
          ) = split(/\s+/,$line);
-        next SLINE if( exists $ridentLnS->{"$query"} ); ### jump identicals
+        my $pair = join("\t",$target,$query);
         if( length $target_best_hits{"$query"} > 0 ) {
             if( $target_bitsc{"$query"} == $bit_score ) {
                 $target_best_hits{"$query"} .= "," . $target;
@@ -712,18 +739,17 @@ sub produceRBH {
     my $printedOrths = 0;
     open( my $ORTHS,"|-","bzip2 -9 >$tmpFile" );
     print {$ORTHS} "#",join("\t",@rbhHeading),"\n";
-    ###### first print identicals:
-    for my $query ( sort { $a <=> $b || $a cmp $b } keys %{$ridentLnQ} ) {
-        print {$ORTHS} join("\t",$ridentLnQ->{"$query"},"Identical"),"\n";
-        $printedOrths++;
-    }
-    ######
-    ###### now reciprocal best hits, and fusions:
+    ###### print reciprocal best hits, and fusions:
     for my $query ( sort { $a <=> $b || $a cmp $b } keys %orth ) {
       ORTH:
         for my $orth ( split(/,+/,$orth{"$query"}) ) {
             #### print reciprocal best hit ortholog
-            print {$ORTHS} $print_line{"$query.$orth"},"\tRBH\n";
+            my $pair = join("\t",$query,$orth);
+            my $type
+                = exists $ridentStats->{"$pair"}
+                ? "Identical RBH"
+                : "RBH";
+            print {$ORTHS} join("\t",$print_line{"$pair"},$type),"\n";
             $printedOrths++;
             ### find fusions from query to target by testing
             ### other queries that find the same target as their top
@@ -732,14 +758,15 @@ sub produceRBH {
             my $shared = @share_this_hit;
             next ORTH unless( $shared > 0 );
             my ($i_query,$f_query)
-                = ($init_target{"$query.$orth"},$end_target{"$query.$orth"});
+                = ($init_target{"$pair"},$end_target{"$pair"});
             my $rbh_coords = join(":",$i_query,$f_query);
             my @coords = ("$rbh_coords");
           PARTNER:
             for my $partner ( @share_this_hit ) {
-                #print $print_line{"$partner.$orth"},"\n";
-                my $q_start = $init_target{"$partner.$orth"};
-                my $q_end   = $end_target{"$partner.$orth"};
+                my $fpair = join("\t",$partner,$orth);
+                #print $print_line{"$fpair"},"\n";
+                my $q_start = $init_target{"$fpair"};
+                my $q_end   = $end_target{"$fpair"};
                 ##### allowing a bit of overlap for fusions:
                 my $q_max_o
                     = sprintf("%.0f",$maxOverlap * ($q_end - $q_start));
@@ -751,8 +778,8 @@ sub produceRBH {
                         = sprintf("%.0f",
                                   $maxOverlap*($cover_end - $cover_start));
                     my $min_overlap
-                        = $cover_max_o > $q_max_o ? (-1 * $q_max_o)
-                        : (-1 * $cover_max_o);
+                        = $cover_max_o > $q_max_o ? ( -1 * $q_max_o )
+                        : ( -1 * $cover_max_o );
                     my $overlap1 = $q_start - ( $cover_end + 1);
                     my $overlap2 = $cover_start - ( $q_end + 1);
                     #print "OVERLAPS: $overlap1, $overlap2, $min_overlap\n";
@@ -766,13 +793,13 @@ sub produceRBH {
                 push(@coords,$new_coords);
                 if( $q_start < $i_query ) {
                     print {$ORTHS}
-                        $print_line{"$partner.$orth"}
+                        $print_line{"$fpair"}
                         ,"\tLEFT of " . $query . "\n";
                     $printedOrths++;
                 }
                 else {
                     print {$ORTHS}
-                        $print_line{"$partner.$orth"}
+                        $print_line{"$fpair"}
                         ,"\tRIGHT of " . $query . "\n";
                     $printedOrths++;
                 }
@@ -819,6 +846,7 @@ sub nameDB {
 
 sub signalHandler {
     if( length($tempFolder) > 1 && -d "$tempFolder" ) {
+        saveLog();
         print "\n\tcleaning up ...\n";
         system "rm -r $tempFolder";
     }
@@ -876,7 +904,9 @@ sub formatDB {
                 . qq( -title $dbfile )
                 . qq( -parse_seqids )
                 . qq( -out $dbfile );
-            system("$mkblastdb 1>/dev/null");
+            print {$LOG} "building db:\n$mkblastdb\n";
+            my $outdb = qx($mkblastdb 2>&1);
+            print {$LOG} "$outdb";
         }
     }
     elsif( $dbType eq "diamond" ) {
@@ -889,6 +919,9 @@ sub formatDB {
                 = qq($opener $file |)
                 . qq( diamond makedb -d $dbfile --quiet --threads $cpus );
             system("$mkdiamondDB &>/dev/null");
+            print {$LOG} "building db:\n$mkdiamondDB\n";
+            my $outdb = qx($mkdiamondDB 2>&1);
+            print {$LOG} "$outdb";
         }
     }
     elsif( $dbType eq "mmseqs" ) {
@@ -897,9 +930,13 @@ sub formatDB {
         }
         else {
             print "producing mmseqsDB: $dbfile\n";
+            #my $mkmmseqsDB
+            #    = qq( mmseqs createdb $file $dbfile );
             my $mkmmseqsDB
-                = qq( mmseqs createdb $file $dbfile );
-            system("$mkmmseqsDB &>/dev/null");
+                = qq( $opener $file | mmseqs createdb stdin $dbfile );
+            print {$LOG} "building db:\n$mkmmseqsDB\n";
+            my $outdb = qx($mkmmseqsDB 2>&1);
+            print {$LOG} "$outdb";
             #seems like the idx files make mmseqs less sensitive
             #print "producing $dbfile mmseqs index\n";
             #my $mkIndex = qq( mmseqs createindex $dbfile $tempFolder );
@@ -915,7 +952,9 @@ sub formatDB {
             my $mklastalDB
                 = qq($opener $file | segmasker -outfmt fasta |)
                 . qq( lastdb -p -c $dbfile );
-            system("$mklastalDB &>/dev/null");
+            print {$LOG} "building db:\n$mklastalDB\n";
+            my $outdb = qx($mklastalDB 2>&1);
+            print {$LOG} "$outdb";
         }
     }
     else {
@@ -939,22 +978,29 @@ sub runBlastp {
     my($queryFile,$targetFile,$alnFile,$maxAlns) = @_;
     my $dbfile = nameDB("$targetFile");
     formatDB("$targetFile","$dbfile","$pwProg");
-    my $nkQuery   = nakedName("$queryFile");
+    my $nkQuery  = nakedName("$queryFile");
     my $nkTarget = nakedName("$targetFile");
-    my $tmpOut = "$tempFolder/$nkQuery.$nkTarget.$pwProg.bz2";
+    my $tmpOut   = "$tempFolder/$nkQuery.$nkTarget.$pwProg.bz2";
     print "running blastp:\n   ",$nkQuery," vs ",$nkTarget,"\n";
     my( $opener,$file ) = how2open($queryFile);
     my $blcommand
-        = qq($opener $file | blastp -db $dbfile )
+        = qq($opener $file | $time blastp -db $dbfile )
+        . qq(-out $tmpOut.tmp )
         . qq(-max_target_seqs $maxAlns $blastOptions);
+    print {$LOG} "running pw comparisons:\n$blcommand\n";
+    my $outPW = qx($blcommand 2>&1);
+    print {$LOG} "$outPW";
     my $lineCount = 0;
     open( my $PWBLAST,"|-","bzip2 -9 > $tmpOut" );
     print {$PWBLAST} "# ",join("\t",@pwHeading),"\n";
-    for my $blastLine ( qx($blcommand) ) {
+    open( my $TMP1,"<","$tmpOut.tmp" );
+    while(<$TMP1>) {
         $lineCount++;
-        print {$PWBLAST} $blastLine;
+        print {$PWBLAST} $_;
     }
+    close($TMP1);
     close($PWBLAST);
+    unlink("$tmpOut.tmp");
     if( $lineCount > 0 ) {
         unless( -d "$pwDir" ) {
             mkdir("$pwDir");
@@ -975,22 +1021,29 @@ sub runDiamond {
     my($queryFile,$targetFile,$alnFile,$maxAlns) = @_;
     my $dbfile = nameDB("$targetFile");
     formatDB("$targetFile","$dbfile","$pwProg");
-    my $nkQuery   = nakedName("$queryFile");
+    my $nkQuery  = nakedName("$queryFile");
     my $nkTarget = nakedName("$targetFile");
-    my $tmpOut = "$tempFolder/$nkQuery.$nkTarget.$pwProg.bz2";
+    my $tmpOut   = "$tempFolder/$nkQuery.$nkTarget.$pwProg.bz2";
     print "running diamond:\n   ",$nkQuery," vs ",$nkTarget,"\n";
     my( $opener,$file ) = how2open("$queryFile");
     my $dmcommand
-        = qq($opener $file | diamond blastp --db $dbfile )
+        = qq($opener $file | $time diamond blastp --db $dbfile )
+        . qq(-o $tmpOut.tmp )
         . qq(--max-target-seqs $maxAlns $diamondOptions);
+    print {$LOG} "running pw comparisons:\n$dmcommand\n";
+    my $outPW = qx($dmcommand 2>&1);
+    print {$LOG} "$outPW";
     my $lineCount = 0;
     open( my $PWDMD,"|-","bzip2 -9 > $tmpOut" );
     print {$PWDMD} "# ",join("\t",@pwHeading),"\n";
-    for my $dmLine ( qx($dmcommand 2>/dev/null) ) {
+    open( my $TMP1,"<","$tmpOut.tmp" );
+    while(<$TMP1>) {
         $lineCount++;
-        print {$PWDMD} $dmLine;
+        print {$PWDMD} $_;
     }
+    close($TMP1);
     close($PWDMD);
+    unlink("$tmpOut.tmp");
     if( $lineCount > 0 ) {
         unless( -d "$pwDir" ) {
             mkdir("$pwDir");
@@ -1011,14 +1064,22 @@ sub runMMseqs {
     my($queryFile,$targetFile,$alnFile,$maxAlns) = @_;
     my $dbfile = nameDB("$targetFile");
     formatDB("$targetFile","$dbfile","$pwProg");
-    my $nkQuery   = nakedName("$queryFile");
+    my $nkQuery  = nakedName("$queryFile");
     my $nkTarget = nakedName("$targetFile");
+    my $tmpOut   = "$tempFolder/$nkQuery.$nkTarget.tmp";
     print "running mmseqs:\n   ",$nkQuery," vs ",$nkTarget,"\n";
-    my $tmpOut = "$tempFolder/$nkQuery.$nkTarget.tmp";
+    my( $opener,$file ) = how2open("$queryFile");
+    #my $mmcommand
+    #    = qq($time mmseqs easy-search )
+    #    . qq($queryFile $dbfile $tmpOut $tempFolder )
+    #    . qq(--max-accept $maxAlns $mmseqsOptions);
     my $mmcommand
-        = qq( mmseqs easy-search $queryFile $dbfile $tmpOut $tempFolder )
-        . qq( --max-accept $maxAlns $mmseqsOptions);
+        = qq($opener $file | $time mmseqs easy-search )
+        . qq(stdin $dbfile $tmpOut $tempFolder )
+        . qq(--max-accept $maxAlns $mmseqsOptions);
+    print {$LOG} "running pw comparisons:\n$mmcommand\n";
     my $mmLog = qx($mmcommand 2>&1);
+    print {$LOG} "$mmLog";
     my $lineCount = 0;
     open( my $MMOUT,"<","$tmpOut" );
     open( my $PWMM,"|-","bzip2 -9 > $tmpOut.bz2" );
@@ -1046,6 +1107,7 @@ sub runMMseqs {
     }
     close($MMOUT);
     close($PWMM);
+    unlink("$tmpOut");
     if( $lineCount > 0 ) {
         unless( -d "$pwDir" ) {
             mkdir("$pwDir");
@@ -1066,21 +1128,24 @@ sub runLastal {
     my($queryFile,$targetFile,$alnFile,$maxAlns) = @_;
     my $dbfile = nameDB("$targetFile");
     formatDB("$targetFile","$dbfile","$pwProg");
-    my $nkQuery   = nakedName("$queryFile");
+    my $nkQuery  = nakedName("$queryFile");
     my $nkTarget = nakedName("$targetFile");
-    my $tmpOut = "$tempFolder/$nkQuery.$nkTarget.$pwProg.bz2";
+    my $tmpOut   = "$tempFolder/$nkQuery.$nkTarget.$pwProg.bz2";
     print "running lastal:\n   ",$nkQuery," vs ",$nkTarget,"\n";
     my( $opener,$file ) = how2open("$queryFile");
     my $lastcommand
-        = qq($opener $file | lastal -f BlastTab+ -P $cpus -N $maxAlns $dbfile);
+        = qq($opener $file | $time lastal -f BlastTab+ )
+        . qq(-P $cpus -N $maxAlns $dbfile);
+    print {$LOG} "running pw comparisons:\n$lastcommand\n";
+    my @lastLines = qx($lastcommand 2>&1);
     my $lineCount = 0;
     open( my $PWLAST,"|-","bzip2 -9 > $tmpOut" );
     print {$PWLAST} "# ",join("\t",@pwHeading),"\n";
   LASTLINE:
-    for my $lastLine ( qx($lastcommand 2>/dev/null) ) {
+    for my $lastLine ( @lastLines ) {
         next LASTLINE if( $lastLine =~ m{^#} );
         next LASTLINE if( $lastLine =~ m{^\s*\n} );
-        chomp;
+        chomp $lastLine;
         my( $query,$target,$pident,
             $alignmentLength,$mismatches,$gapopens,
             $qstart,$qend,
@@ -1089,13 +1154,18 @@ sub runLastal {
             $qlen,$tlen,$raw
         ) = split(/\t/,$lastLine);
         #next LASTLINE if ( $evalue > $maxEvalue );
-        $lineCount++;
-        print {$PWLAST}
-            join("\t",
-                 $query,$target,
-                 $evalue,$bits,$pident,
-                 $qstart,$qend,$qlen,
-                 $tstart,$tend,$tlen),"\n";
+        if( $raw > 2 ) {
+            $lineCount++;
+            print {$PWLAST}
+                join("\t",
+                     $query,$target,
+                     $evalue,$bits,$pident,
+                     $qstart,$qend,$qlen,
+                     $tstart,$tend,$tlen),"\n";
+        }
+        else{
+            print {$LOG} $lastLine,"\n";
+        }
     }
     close($PWLAST);
     if( $lineCount > 0 ) {
@@ -1229,4 +1299,43 @@ sub podhelp {
     $parser->output_fh($PIPE);
     $parser->parse_string_document($podUsage);
     exit;
+}
+
+sub saveLog {
+    if( fileno $LOG ) {
+        close($LOG);
+    }
+    #### save logfile
+    print "   saving log file to $saveLog\n";
+    if( -d "$pwDir" ) {
+        mkdir("$pwDir/Logs") unless( -d "$pwDir/Logs" );
+    }
+    else {
+        mkdir("$pwDir");
+        mkdir("$pwDir/Logs");
+    }
+    if( -f "$saveLog" ) {
+        my $namedQ = nakedName($queries[0]);
+        opendir( my $LOGD,"$pwDir/Logs");
+        my @logfiles = grep { m{$namedQ} } readdir($LOGD);
+        closedir($LOGD);
+        my $cntLogs = @logfiles;
+        $cntLogs++;
+        $saveLog =~ s{\.log}{-$cntLogs.log};
+        system("mv $tmpLog $saveLog &>/dev/null");
+    }
+    else {
+        system("mv $tmpLog $saveLog &>/dev/null");
+    }
+}
+
+sub cleanTMP {
+    opendir( my $TMPD,"$tempFolder" );
+    my @toErase = grep { m{^\w+} } readdir($TMPD);
+    closedir($TMPD);
+  ERASING:
+    for my $toErase ( @toErase ) {
+        next ERASING if( $toErase =~ m{log$} );
+        system "rm -r $tempFolder/$toErase &>/dev/null";
+    }
 }
