@@ -30,7 +30,7 @@ my $matchProg = join("|",@pwProgs);
 my ($refavailable,$refmissing,$missMsg) = checkSoftware();
 
 ###### defaults, etc
-my $cov1       = 50;
+my $cov1       = 30;
 my $cov2       = 99;
 my $defCov     = 60;
 my $defAln     = "F";
@@ -39,7 +39,8 @@ my $minmmseqs  = 1;
 my $maxmmseqs  = 7;
 my $diamondS   = 'M';
 my $mmseqsS    = '5.7';
-my $diamonV    = "2.0.1";
+my $diamonV    = "2.0.2";
+my $defCPU     = 4;
 ###### assignable:
 my @queries    = ();
 my @against    = ();
@@ -54,7 +55,6 @@ my $pwDir      = "compRuns";
 my $sensitive  = '';
 my $runRBH     = "T";
 my $keepold    = 'T';
-#my $cpus       = 1;
 my $topMatch   = 0;
 my $minTop     = 50; # 30 was enough for lastsl in one example
 my $matchRatio = 7;
@@ -66,7 +66,7 @@ my $cpu_count
     : qx(sysctl -a 2>/dev/null | grep 'max-threads')
     =~ m{\.max-threads\s+=\s+(\d+)} ? $1
     : 1;
-my $cpus = $cpu_count >= 4 ? 4 : 1;
+my $cpus = $cpu_count >= $defCPU ? $defCPU : 1;
 
 my $podUsage
     = qq(=pod\n\n)
@@ -127,7 +127,7 @@ my $podUsage
     . qq(=item B<-z>\n\nmaximum number of targets to find with $matchProg\n)
     . qq(minimum of $minTop. Defaults to 1/${matchRatio}th of the\n)
     . qq(sequences in the target file\n\n)
-    . qq(=item B<-x>\n\nnumber of CPUs to use, default: 1 (max: $cpu_count)\n\n)
+    . qq(=item B<-x>\n\nnumber of CPUs to use, default: $cpus (max: $cpu_count)\n\n)
     . qq(=back\n\n)
     . qq(=head1 REQUIREMENTS\n\n)
     . qq(This program requires either appropriately formatted\n)
@@ -254,7 +254,7 @@ my $alnSeqs = $alnSeqs =~ m{^(T|F)$}i ? uc($1) : $defAln;
 print "include aligned seqs in $pwProg results: $alnSeqs\n";
 my $cpus
     = $cpus > 0 && $cpus <= $cpu_count ? $cpus
-    : $cpu_count >= 4 ? 4
+    : $cpu_count >= $defCPU ? $defCPU
     : 1;
 print "uing $cpus cpu threads\n";
 my $runRBH = $runRBH =~ m{^(T|F)$}i ? uc($1) : 'T';
