@@ -17,7 +17,7 @@ my $ownName = $0;
 $ownName =~ s{.*/}{};
 my $system = qx(uname -s);
 chomp($system);
-my $time = $system eq 'Darwin' ? '/usr/bin/time -p' : 'time -p';
+my $time = $system eq 'Darwin' ? '/usr/bin/time -p' : 'time';
 
 my %url = (
     "blastp"  => 'ftp://ftp.ncbi.nlm.nih.gov/blast/executables/LATEST/',
@@ -37,7 +37,8 @@ my $defAln     = "F";
 my $defPW      = 'diamond';
 my $minmmseqs  = 1;
 my $maxmmseqs  = 7;
-my $diamondS   = 'M';
+my $diamondS   = 'V';
+my $diamondSl  = 'very-sensitive';
 my $mmseqsS    = '5.7';
 my $diamonV    = "2.0.2";
 my $defCPU     = 4;
@@ -56,7 +57,7 @@ my $sensitive  = '';
 my $runRBH     = "T";
 my $keepold    = 'T';
 my $topMatch   = 0;
-my $minTop     = 50; # 30 was enough for lastsl in one example
+my $minTop     = 50; # 30 was enough for lastal in one example
 my $matchRatio = 7;
 
 ### check if there's more than one processor or assume there's 1.
@@ -224,14 +225,15 @@ if( $pwProg eq "diamond" ) {
         : $sensitive eq 'M' ? "more-sensitive"
         : $sensitive eq 'V' ? "very-sensitive"
         : $sensitive eq 'U' ? "ultra-sensitive"
-        : 'more-sensitive';
+        : $diamondSl;
     print "will run diamond in '$dmdmode' mode\n";
 }
 my $msmode = '';
 if( $pwProg eq "mmseqs" ) {
     $sensitive
         = $sensitive =~ m{^(F|S|M|V|U)$}i ? uc($1)
-        : ( $sensitive >= $minmmseqs ) && ( $sensitive <= $maxmmseqs ) ? $sensitive
+        : ( $sensitive >= $minmmseqs ) && ( $sensitive <= $maxmmseqs )
+        ? $sensitive
         : $mmseqsS;
     print "testing $sensitive<-sensitive\n";
     $msmode
@@ -240,8 +242,9 @@ if( $pwProg eq "mmseqs" ) {
         : $sensitive eq 'M' ? "-s 4"
         : $sensitive eq 'V' ? "-s 5.7"
         : $sensitive eq 'U' ? "-s $maxmmseqs"
-        : ( $sensitive >= $minmmseqs ) && ( $sensitive <= $maxmmseqs ) ? "-s $sensitive"
-        : '-s $mmseqsS';
+        : ( $sensitive >= $minmmseqs ) && ( $sensitive <= $maxmmseqs )
+        ? "-s $sensitive"
+        : "-s $mmseqsS";
     print "will run mmseqs in '$msmode' mode\n";
 }
 my $minCov = $minCov >= $cov1 && $minCov <= $cov2 ? $minCov : $defCov;
@@ -287,10 +290,10 @@ my @pwHeading = qw(
                       pident
                       qStart
                       qEnd
-                      qLength
+                      qCover
                       tStart
                       tEnd
-                      tLength
+                      tCover
               );
 if( $alnSeqs eq "T" ) {
     push(@pwHeading,"qSeq","tSeq");
@@ -330,6 +333,9 @@ if( $alnSeqs eq "T" ) {
     push(@pwTbl,"qseq","sseq");
 }
 my $pwTbl = join(" ","6",@pwTbl);
+my $dmdTbl = $pwTbl;
+$dmdTbl =~ s{qlen}{qcovhsp};
+$dmdTbl =~ s{slen}{scovhsp};
 
 ##### table format for mmseqs:
 my @mmfields = qw(
@@ -340,10 +346,10 @@ my @mmfields = qw(
                      pident
                      qstart
                      qend
-                     qlen
+                     qcov
                      tstart
                      tend
-                     tlen
+                     tcov
              );
 ##### add alignments to mmseqs results table?
 if( $alnSeqs eq "T" ) {
@@ -367,7 +373,7 @@ my $diamondOptions
     . qq( --threads $cpus )
     . qq( --tmpdir $tempFolder )
     . qq( --quiet )
-    . qq( --outfmt $pwTbl );
+    . qq( --outfmt $dmdTbl );
 if( $dmdmode =~ m{sensitive} ) {
     $diamondOptions = qq( --$dmdmode ) . $diamondOptions;
 }
@@ -524,24 +530,33 @@ sub buildNrunRBH {
         my %pair_Evalue = (); # capture E-value
         my %pair_line   = (); # capture line
         my %identStats  = (); # capture stats for identical proteins
+        ##### check if coverage needs to be calculated
+        my $calcCover   = 0;
         ##### open original homologs
         open( my $IN,"-|","bzip2 -qdc $alnFile" );
       HOMOLOGLINE:
         while(<$IN>) {
-            next HOMOLOGLINE if( m{^#} );
-            chomp;
+            if( m{^#} ) {
+                ##### check if coverage needs to be calculated
+                if( m{qLength}i ) {
+                    $calcCover++;
+                }
+                next HOMOLOGLINE;
+            }
             my(
                 $query,$target,
                 $evalue,$bitscore,$pident,
-                $qstart,$qend,$qlen,
-                $sstart,$send,$slen,
+                $qstart,$qend,$qcov,
+                $sstart,$send,$scov,
                 $qalnseq,$salnseq
             ) = split;
             $query  = cleanID("$query");
             $target = cleanID("$target");
             ## percent coverages
-            my $qcov = calcCoverage($qstart,$qend,$qlen);
-            my $scov = calcCoverage($sstart,$send,$slen);
+            if( $calcCover > 0 ) {
+                $qcov = calcCoverage($qstart,$qend,$qcov);
+                $scov = calcCoverage($sstart,$send,$scov);
+            }
             if( ( $qcov >= $minCov ) || ( $scov >= $minCov ) ) {
                 my $pairF = join("\t",$query,$target);
                 my $pairR = join("\t",$target,$query);
@@ -996,7 +1011,29 @@ sub runBlastp {
     open( my $TMP1,"<","$tmpOut.tmp" );
     while(<$TMP1>) {
         $lineCount++;
-        print {$PWBLAST} $_;
+        my(
+            $query,$target,
+            $evalue,$bitscore,$pident,
+            $qstart,$qend,$qlen,
+            $sstart,$send,$slen,
+            $qseq,$sseq
+        ) = split;
+        $query  = cleanID("$query");
+        $target = cleanID("$target");
+        ## percent coverages
+        my $qcov = calcCoverage($qstart,$qend,$qlen);
+        my $scov = calcCoverage($sstart,$send,$slen);
+        my @putBack = (
+            $query,$target,
+            $evalue,$bitscore,$pident,
+            $qstart,$qend,$qcov,
+            $sstart,$send,$scov
+        );
+        if( length($qseq) > 0 && length($sseq) > 0 ) {
+            push(@putBack,$qseq,$sseq);
+        }
+        print {$PWBLAST}
+            join("\t",@putBack),"\n";
     }
     close($TMP1);
     close($PWBLAST);
@@ -1069,10 +1106,6 @@ sub runMMseqs {
     my $tmpOut   = "$tempFolder/$nkQuery.$nkTarget.tmp";
     print "running mmseqs:\n   ",$nkQuery," vs ",$nkTarget,"\n";
     my( $opener,$file ) = how2open("$queryFile");
-    #my $mmcommand
-    #    = qq($time mmseqs easy-search )
-    #    . qq($queryFile $dbfile $tmpOut $tempFolder )
-    #    . qq(--max-accept $maxAlns $mmseqsOptions);
     my $mmcommand
         = qq($opener $file | $time mmseqs easy-search )
         . qq(stdin $dbfile $tmpOut $tempFolder )
@@ -1088,17 +1121,19 @@ sub runMMseqs {
         $lineCount++;
         my( $query,$target,
             $evalue,$bits,$pident,
-            $qstart,$qend,$qlen,
-            $tstart,$tend,$tlen,
+            $qstart,$qend,$qcov,
+            $tstart,$tend,$tcov,
             $qseq,$tseq
         ) = split;
-        ##### fix percent identity
+        ##### fix percents
         $pident *= 100;
+        $qcov   *= 100;
+        $tcov   *= 100;
         my @putBack = (
             $query,$target,
             $evalue,$bits,$pident,
-            $qstart,$qend,$qlen,
-            $tstart,$tend,$tlen
+            $qstart,$qend,$qcov,
+            $tstart,$tend,$tcov
         );
         if( length($qseq) > 0 && length($tseq) > 0 ) {
             push(@putBack,$qseq,$tseq);
@@ -1154,14 +1189,17 @@ sub runLastal {
             $qlen,$tlen,$raw
         ) = split(/\t/,$lastLine);
         #next LASTLINE if ( $evalue > $maxEvalue );
+        ## percent coverages
+        my $qcov = calcCoverage($qstart,$qend,$qlen);
+        my $tcov = calcCoverage($tstart,$tend,$tlen);
         if( $raw > 2 ) {
             $lineCount++;
             print {$PWLAST}
                 join("\t",
                      $query,$target,
                      $evalue,$bits,$pident,
-                     $qstart,$qend,$qlen,
-                     $tstart,$tend,$tlen),"\n";
+                     $qstart,$qend,$qcov,
+                     $tstart,$tend,$tcov),"\n";
         }
         else{
             print {$LOG} $lastLine,"\n";
