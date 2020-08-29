@@ -559,11 +559,11 @@ sub readPW {
         my(
             $query,$target,
             $evalue,$bitscore,$pident,
-            $qstart,$qend,$qlen,
-            $sstart,$send,$slen,
+            $qstart,$qend,$qcov,
+            $sstart,$send,$scov,
             $qalnseq,$salnseq
         ) = split;
-        $query   = cleanID("$query");
+        $query  = cleanID("$query");
         $target = cleanID("$target");
         next ALNLINE if( $query eq $target );
         next ALNLINE if( $dNdSed{"$query.$target"} > 0 );
