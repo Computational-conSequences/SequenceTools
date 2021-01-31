@@ -132,12 +132,14 @@ my $helpMsg
     . qq(             https://www.doi.org/10.1038/s41467-018-07641-9\n)
     . qq(       ANIl: our lastal implementation\n)
     . qq(       ANIu: our ublast implementation\n)
-    . qq(   -c fragment length (not used in ANIx or ANIm), minimum $minLn,\n)
-    . qq(       maximum $maxLn default $defaultLn\n)
+    . qq(   -c fragment length (not used in ANIx, ANIm, or ANIf),\n)
+    . qq(       minimum $minLn, maximum $maxLn default $defaultLn\n)
     . qq(   -o output folder, default ResultsANI\n)
     . qq(   -k keep prior result [T|F], default 'T'. If 'T' prior results\n)
     . qq(       will be taken from appropriate files in the output folder\n)
     . qq(   -x number of cpus to use, maximum $cpuNumber, default $defCPUs\n)
+    #. qq(       using '-x X' with ANIf will distribute genomes into lists of\n)
+    #. qq(       $batch genomes and run fastANI with the maximum number of cpus.\n)
     . qq(\n);
 if( $missCount > 0 ) {
     $helpMsg
@@ -189,7 +191,7 @@ if( $allvsall == 0 ) {
     }
 }
 else {
-    if ( -d "$fnaDir" ) {
+    if( -d "$fnaDir" ) {
         if( @queries = findFnaFiles("$fnaDir","all vs all") ) {
             @against = @queries;
         }
@@ -361,11 +363,12 @@ sub proceedwQT {
         : $method eq "ANIp" ? calcANIp($query,$against)
         : calcANIx($query,$against);
     my $ani2
-        = $method eq "ANIb" ? calcANIb($against,$query)
-        : $method eq "ANIf" ? calcANIf($against,$query)
-        : $method eq "ANIu" ? calcANIu($against,$query)
-        : $method eq "ANIl" ? calcANIl($against,$query)
-        : $method eq "ANIp" ? calcANIp($against,$query)
+        = $query eq $against ? $ani1
+        : $method eq "ANIb"  ? calcANIb($against,$query)
+        : $method eq "ANIf"  ? calcANIf($against,$query)
+        : $method eq "ANIu"  ? calcANIu($against,$query)
+        : $method eq "ANIl"  ? calcANIl($against,$query)
+        : $method eq "ANIp"  ? calcANIp($against,$query)
         : $ani1; ### both ANIm and ANIx are reciprocal
         #: $method eq "ANIm" ? calcANIm($against,$query)
         #: calcANIx($against,$query);
@@ -565,20 +568,32 @@ sub calcANIm {
     $outfile = join("/",$tempFolder,$outfile);
     my $qLarge = inflateFile("$qfile");
     my $sLarge = inflateFile("$sfile");
+    # implemented with "dnadiff" as per:
+    # https://doi.org/10.1093/bioinformatics/btv681
     my $nucmerer
         = qq(nucmer --mum -t $cpus -p $outfile $qLarge $sLarge);
-        #= qq(nucmer --mum -L $cutLn -t $cpus -p $outfile $qLarge $sLarge);
-    my $outNum   = qx($nucmerer);
-    my @pcids   = ();
+    my $outNum  = qx($nucmerer);
+    my $dnaDiffer
+        = qq(dnadiff -d $outfile.delta -p $outfile);
+    my $outDiff = qx($dnaDiffer);
     my $totalLn = 0;
     my $totalId = 0;
-    for my $line ( qx(show-coords -T -H $outfile.delta) ) {
-        my($q1,$q2,$t1,$t2,$ln1,$ln2,$pcid) = split(/\t/,$line);
-        $totalLn += $ln1;
-        $totalId += ($ln1 * ($pcid/100));
+    my $ani     = 0;
+    my $getANI = 'no';
+    open( my $DIFF,"<","$outfile.report" );
+  READDIFF:
+    while(<$DIFF>) {
+        if( $getANI eq 'yes' && m{^AvgIdentity} ) {
+            my($label,$ani1,$ani2) = split;
+            $ani = sprintf("%.${round}f",( ( $ani1 + $ani2 ) / 2 ) );
+            last READDIFF;
+        }
+        if( m{^M-to-M\s+} ) {
+            $getANI = 'yes';
+        }
     }
-    if( $totalLn > 0 ) {
-        my $ani = sprintf("%.${round}f",100*($totalId/$totalLn));
+    close($DIFF);
+    if( $ani > 0 ) {
         print "ANI is $ani\n";
         return($ani);
     }
@@ -695,8 +710,9 @@ sub calcANIf {
     my $fastANIer
         = qq(fastANI -o $outfile -q $qLarge -r $sLarge)
         . qq( -t $cpus )
-        . qq( --fragLen $cutLn )
         ;
+    ##### trusting that the fastANI was optimized for length:
+    #    . qq( --fragLen $cutLn )
     my $fastOut = qx($fastANIer 2>&1);
     my $anif = 0;
     open( my $FASTANIED,"<","$outfile" );
