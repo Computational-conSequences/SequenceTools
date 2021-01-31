@@ -330,7 +330,12 @@ my @pwTbl = qw(
           );
 ##### add alignments to blast results table?
 if( $alnSeqs eq "T" ) {
-    push(@pwTbl,"qseq","sseq");
+    if( $pwProg eq "diamond" ) {
+        push(@pwTbl,"qseq_gapped","sseq_gapped");
+    }
+    else {
+        push(@pwTbl,"qseq","sseq");
+    }
 }
 my $pwTbl = join(" ","6",@pwTbl);
 my $dmdTbl = $pwTbl;
@@ -362,9 +367,9 @@ my $blastOptions
     . qq( -seg yes )
     . qq( -soft_masking true )
     . qq( -comp_based_stats 0 )
-    . qq( -parse_deflines )
     . qq( -num_threads $cpus )
     . qq( -outfmt '$pwTbl' );
+#    . qq( -parse_deflines )
 
 my $diamondOptions
     = qq( --evalue $maxEvalue )
@@ -372,6 +377,7 @@ my $diamondOptions
     . qq( --comp-based-stats 0 )
     . qq( --threads $cpus )
     . qq( --tmpdir $tempFolder )
+    . qq( -c 1 )
     . qq( --quiet )
     . qq( --outfmt $dmdTbl );
 if( $dmdmode =~ m{sensitive} ) {
@@ -917,8 +923,8 @@ sub formatDB {
                 . qq( makeblastdb )
                 . qq( -dbtype prot )
                 . qq( -title $dbfile )
-                . qq( -parse_seqids )
                 . qq( -out $dbfile );
+                #. qq( -parse_seqids )
             print {$LOG} "building db:\n$mkblastdb\n";
             my $outdb = qx($mkblastdb 2>&1);
             print {$LOG} "$outdb";
