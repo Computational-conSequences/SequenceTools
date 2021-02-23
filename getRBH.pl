@@ -59,6 +59,7 @@ my $keepold    = 'T';
 my $topMatch   = 0;
 my $minTop     = 50; # 30 was enough for lastal in one example
 my $matchRatio = 7;
+my $lengthsort = 'F';
 
 ### check if there's more than one processor or assume there's 1.
 my $cpu_count
@@ -113,6 +114,8 @@ my $podUsage
     . qq((10%) of shortest sequence.\n\n)
     . qq(=item B<-e>\n\n)
     . qq(maximum e-value, default $maxEvalue\n\n)
+    . qq(=item B<-l>\n\n)
+    . qq(sort files so that pairwise comparisons run against largest database [T|F], default $lengthsort\n\n)
     . qq(=item B<-a>\n\n)
     . qq(include aligned sequences in comparison results [T/F], default $defAln. (not available in lastal)\n\n)
     . qq(=item B<-r>\n\n)
@@ -160,12 +163,17 @@ GetOptions(
     "k=s"    => \$keepold,
     "z=s"    => \$topMatch,
     "x=i"    => \$cpus,
+    "l=s"    => \$lengthsort,
 ) or podhelp();
 
 ### check if the selected program works
 if( $refmissing->{"$pwProg"} ) {
     podhelp("$pwProg is missing");
 }
+
+### sorting by file length?
+$lengthsort = $lengthsort =~ m{^(T|F)$}i ? uc($1) : 'F';
+print "sorting by file length = $lengthsort\n";
 
 ### check if working with all-vs-all directory
 my $allvsall = length($faaDir) > 0 ? 1 : 0;
@@ -1178,12 +1186,12 @@ sub runLastal {
         = qq($opener $file | $time lastal -f BlastTab+ )
         . qq(-P $cpus -N $maxAlns $dbfile);
     print {$LOG} "running pw comparisons:\n$lastcommand\n";
-    my @lastLines = qx($lastcommand 2>&1);
+    # my @lastLines = qx($lastcommand 2>&1);
     my $lineCount = 0;
     open( my $PWLAST,"|-","bzip2 -9 > $tmpOut" );
     print {$PWLAST} "# ",join("\t",@pwHeading),"\n";
   LASTLINE:
-    for my $lastLine ( @lastLines ) {
+    for my $lastLine ( qx($lastcommand 2>&1) ) {
         next LASTLINE if( $lastLine =~ m{^#} );
         next LASTLINE if( $lastLine =~ m{^\s*\n} );
         chomp $lastLine;
@@ -1248,7 +1256,17 @@ sub findFaaFiles {
     my $cntFound = @foundFiles;
     if( $cntFound > 0 ) {
         print " will work with $cntFound $label files\n";
-        return(@foundFiles);
+        if( $lengthsort eq 'T' ) {
+            my @lnsort = sort {
+                (stat("$a"))[7] <=> (stat("$b"))[7]
+                    || $a cmp $b } @foundFiles;
+            #print join("\n",@lnsort),"\n";
+            #exit;
+            return(@lnsort);
+        }
+        else {
+            return(@foundFiles);
+        }
     }
     else {
         die " no faa/fasta files in $label directory ($testDir)\n\n";
