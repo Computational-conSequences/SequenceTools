@@ -17,7 +17,6 @@ my $ownName = $0;
 $ownName =~ s{.*/}{};
 my $system = qx(uname -s);
 chomp($system);
-my $time = $system eq 'Darwin' ? '/usr/bin/time -p' : 'time';
 
 my %url = (
     "blastp"  => 'ftp://ftp.ncbi.nlm.nih.gov/blast/executables/LATEST/',
@@ -60,6 +59,7 @@ my $topMatch   = 0;
 my $minTop     = 50; # 30 was enough for lastal in one example
 my $matchRatio = 7;
 my $lengthsort = 'F';
+my $logtime    = 'F';
 
 ### check if there's more than one processor or assume there's 1.
 my $cpu_count
@@ -132,6 +132,7 @@ my $podUsage
     . qq(minimum of $minTop. Defaults to 1/${matchRatio}th of the\n)
     . qq(sequences in the target file\n\n)
     . qq(=item B<-x>\n\nnumber of CPUs to use, default: $cpus (max: $cpu_count)\n\n)
+    . qq(=item B<-n>\n\nnote time spent running pairwise comparisons (T|F), default: $logtime\n\n)
     . qq(=back\n\n)
     . qq(=head1 REQUIREMENTS\n\n)
     . qq(This program requires either appropriately formatted\n)
@@ -164,7 +165,12 @@ GetOptions(
     "z=s"    => \$topMatch,
     "x=i"    => \$cpus,
     "l=s"    => \$lengthsort,
+    "n=s"    => \$logtime,
 ) or podhelp();
+
+if( !$faaDir && ( !$queries[0] || !$against[0] ) ) {
+    podhelp();
+}
 
 ### check if the selected program works
 if( $refmissing->{"$pwProg"} ) {
@@ -285,6 +291,13 @@ else {
             . " even if prior results exists\n";
     }
 }
+
+$logtime = $logtime =~ m{^(T|F)$}i ? uc($1) : 'F';
+my $time = '';
+if( $logtime eq 'T' ) {
+    $time = $system eq 'Darwin' ? '/usr/bin/time -p' : 'time';
+}
+
 #### directories where to find files:
 #### temporary working directory:
 my $tempFolder = tempdir("/tmp/$ownName.XXXXXXXXXXXX");
@@ -411,6 +424,9 @@ open( my $LOG,">","$tmpLog" );
 my $maxKeep  = 10;
 my $kept     = 0;
 if( $allvsall > 0 ) {
+    my $totalfiles = @queries;
+    my $totalpairs = $totalfiles * ( $totalfiles + 1 ) / 2;
+    my $currentrun = 0;
     ##### by running these in reverse we ensure that
     ##### each database is formatted only once
   TARGETAVA:
@@ -420,11 +436,19 @@ if( $allvsall > 0 ) {
             = $topMatch >= $minTop ? $topMatch
             : sprintf("%.0f",($cntTargets/$matchRatio));
         if( $cntTargets < 1 ) {
+            $currentrun += @queries;
+            print {$LOG} "jumped empty file: $faaTarget\n";
             print "  jumping empty file: $faaTarget";
             next TARGETAVA;
         }
         else {
             for my $faaQuery ( @queries,$faaTarget ) {
+                $currentrun++;
+                print {$LOG}
+                    "running  ",
+                    nakedName($faaQuery)," vs ",
+                    nakedName($faaTarget),
+                    " ($currentrun/$totalpairs runs)\n";
                 runPairWise("$faaQuery","$faaTarget","$maxAlns");
                 if( $runRBH eq 'T' ) {
                     buildNrunRBH("$faaQuery","$faaTarget");
@@ -437,8 +461,14 @@ if( $allvsall > 0 ) {
             }
         }
     }
+    print {$LOG} "\ndone comparing $totalfiles files for a total of\n"
+        ."$totalpairs pairwise comparisons ($currentrun counted)\n\n";
 }
 else {
+    my $totalQs = @queries;
+    my $totalTs = @against;
+    my $totalpairs = $totalQs * $totalTs;
+    my $currentrun = 0;
     ##### by running these target-wise to try and ensure that
     ##### each database is formatted only once
   TARGETQVA:
@@ -448,11 +478,19 @@ else {
             = $topMatch >= $minTop ? $topMatch
             : sprintf("%.0f",($cntTargets/$matchRatio));
         if( $cntTargets < 1 ) {
+            $currentrun += @queries;
+            print {$LOG} "jumped empty file: $faaTarget\n";
             print "  jumping empty file: $faaTarget";
             next TARGETQVA;
         }
         else {
             for my $faaQuery ( @queries ) {
+                $currentrun++;
+                print {$LOG}
+                    "running  ",
+                    nakedName($faaQuery)," vs ",
+                    nakedName($faaTarget),
+                    " ($currentrun/$totalpairs runs)\n";
                 runPairWise("$faaQuery","$faaTarget","$maxAlns");
                 if( $runRBH eq 'T' ) {
                     buildNrunRBH("$faaQuery","$faaTarget");
@@ -465,6 +503,8 @@ else {
             }
         }
     }
+    print {$LOG} "\ndone comparing $totalQs vs $totalTs files for a total of\n"
+        ."$totalpairs pairwise comparisons ($currentrun counted)\n\n";
 }
 close($LOG);
 #### save logfile
