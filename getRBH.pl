@@ -56,19 +56,21 @@ my $sensitive  = '';
 my $runRBH     = "T";
 my $keepold    = 'T';
 my $topMatch   = 0;
-my $minTop     = 50; # 30 was enough for lastal in one example
+my $minTop     = 1; # 30 was enough for lastal in one example
 my $matchRatio = 7;
 my $lengthsort = 'F';
 my $logtime    = 'F';
 
-### check if there's more than one processor or assume there's 1.
+### check if there's more than one processor or assume there's $defCPU.
 my $cpu_count
-    = qx(sysctl -a | grep 'cpu.thread_count')
+    = qx(getconf _NPROCESSORS_ONLN 2>/dev/null)
+    =~ m{\s*(\d+)\s*}                 ? $1
+    : qx(sysctl -a 2>/dev/null | grep 'cpu.thread_count')
     =~ m{\.cpu\.thread_count:\s+(\d+)} ? $1
     : qx(sysctl -a 2>/dev/null | grep 'max-threads')
-    =~ m{\.max-threads\s+=\s+(\d+)} ? $1
-    : 1;
-my $cpus = $cpu_count >= $defCPU ? $defCPU : 1;
+    =~ m{\.max-threads\s+=\s+(\d+)}    ? $1
+    : $defCPU;
+my $cpus = $cpu_count >= $defCPU ? $defCPU : 2;
 
 my $podUsage
     = qq(=pod\n\n)
@@ -129,7 +131,7 @@ my $podUsage
     . qq(=item B<T:>\n\nkeep prior alignments and prior RBHs\n\n)
     . qq(=back\n\n)
     . qq(=item B<-z>\n\nmaximum number of targets to find with $matchProg\n)
-    . qq(minimum of $minTop. Defaults to 1/${matchRatio}th of the\n)
+    . qq(minimum recommended is 50. Defaults to 1/${matchRatio}th of the\n)
     . qq(sequences in the target file\n\n)
     . qq(=item B<-x>\n\nnumber of CPUs to use, default: $cpus (max: $cpu_count)\n\n)
     . qq(=item B<-n>\n\nnote time spent running pairwise comparisons (T|F), default: $logtime\n\n)
@@ -156,13 +158,13 @@ GetOptions(
     "m=s"    => \$pwDir,
     "s=s"    => \$sensitive,
     "o=s"    => \$rbhDir,
-    "c=s"    => \$minCov,
-    "f=s"    => \$maxOverlap,
-    "e=s"    => \$maxEvalue,
+    "c=f"    => \$minCov,
+    "f=f"    => \$maxOverlap,
+    "e=f"    => \$maxEvalue,
     "a=s"    => \$alnSeqs,
     "r=s"    => \$runRBH,
     "k=s"    => \$keepold,
-    "z=s"    => \$topMatch,
+    "z=i"    => \$topMatch,
     "x=i"    => \$cpus,
     "l=s"    => \$lengthsort,
     "n=s"    => \$logtime,

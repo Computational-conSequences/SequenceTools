@@ -75,7 +75,9 @@ my %needCuts = (
 );
 
 my $cpuNumber
-    = qx(sysctl -a | grep 'cpu.thread_count')
+    = qx(getconf _NPROCESSORS_ONLN 2>/dev/null)
+    =~ m{\s*(\d+)\s*}                  ? $1
+    : qx(sysctl -a 2>/dev/null | grep 'cpu.thread_count')
     =~ m{\.cpu\.thread_count:\s+(\d+)} ? $1
     : qx(sysctl -a 2>/dev/null | grep 'max-threads')
     =~ m{\.max-threads\s+=\s+(\d+)}    ? $1
@@ -132,7 +134,7 @@ my $helpMsg
     . qq(             https://www.doi.org/10.1038/s41467-018-07641-9\n)
     . qq(       ANIl: our lastal implementation\n)
     . qq(       ANIu: our ublast implementation\n)
-    . qq(   -c fragment length (not used in ANIx, ANIm, or ANIf),\n)
+    . qq(   -c fragment length (not used in ANIx, or ANIm),\n)
     . qq(       minimum $minLn, maximum $maxLn default $defaultLn\n)
     . qq(   -o output folder, default ResultsANI\n)
     . qq(   -k keep prior result [T|F], default 'T'. If 'T' prior results\n)
@@ -153,10 +155,10 @@ my $options = GetOptions(
     "t=s{,}" => \@against,
     "d=s"    => \$fnaDir,
     "m=s"    => \$method,
-    "c=s"    => \$cutLn,
+    "c=i"    => \$cutLn,
     "o=s"    => \$resultsDir,
     "k=s"    => \$keepold,
-    "x=s"    => \$cpus,
+    "x=i"    => \$cpus,
 ) or die "$helpMsg";
 
 ### check if working with all-vs-all directory
@@ -170,7 +172,7 @@ if( $allvsall == 0 ) {
     else {
         ####### check queries
         my %qseen = ();
-        @queries = grep { not $qseen{"$_"}++ } @queries;
+        @queries = sort grep { not $qseen{"$_"}++ } @queries;
         my $qtoFind = @queries;
         if( -d $queries[0] && $qtoFind == 1 ) {
             @queries = findFnaFiles("$queries[0]","query");
@@ -180,7 +182,7 @@ if( $allvsall == 0 ) {
         }
         ###### check targets
         my %tseen = ();
-        @against = grep { not $tseen{"$_"}++ } @against;
+        @against = sort grep { not $tseen{"$_"}++ } @against;
         my $stoFind = @against;
         if( -d $against[0] && $stoFind == 1 ) {
             @against = findFnaFiles("$against[0]","target");
@@ -709,7 +711,7 @@ sub calcANIf {
     my $sLarge = inflateFile("$sfile");
     my $fastANIer
         = qq(fastANI -o $outfile -q $qLarge -r $sLarge)
-        . qq( -t $cpus )
+        . qq( -t $cpus --fragLen $cutLn )
         ;
     ##### trusting that the fastANI was optimized for length:
     #    . qq( --fragLen $cutLn )
@@ -904,7 +906,7 @@ sub findFnaFiles {
     my @foundFiles = ();
     #### now repopulate arrays:
     opendir( my $FNADIR,"$testDir" );
-    my @fnaFiles = grep { m{^\w} && m{\.(fna|fasta)} } readdir $FNADIR;
+    my @fnaFiles = sort grep { m{^\w} && m{\.(fna|fasta)} } readdir $FNADIR;
     for my $fnaFile ( @fnaFiles ) {
         my $cntSeqs = checkFasta("$testDir/$fnaFile");
         if( $cntSeqs > 0 ) {
