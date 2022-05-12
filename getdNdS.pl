@@ -25,7 +25,7 @@ my $defPW     = 'diamond';
 
 ############ variables:
 my $queryGnm   = '';
-my $targetGnm = '';
+my $targetGnm  = '';
 my $genomeData = $defaultGD;
 my $method     = '';
 my $codonF     = 2;
@@ -52,7 +52,7 @@ my $helpBrief
     . qq(   -p program for pairwise comparisons [$matchProg],\n)
     . qq(       default: $defPW\n)
     . qq(       (CAUTION: mmseqs is not working yet)\n)
-    . qq(   -m directory for $matchProg results, default compRuns\n)
+    . qq(   -m directory for $matchProg results, default $pwDir\n)
     . qq(   -o output directory, default [method]-dNdS\n)
     . qq(\n)
     . qq(requirements:\n)
@@ -88,7 +88,7 @@ my $program = $method =~ m{^(bayes|codeml)$} ? "codeml"    : "yn00";
 my $codonF  = $codonF =~ m{^(2|5)$}          ? $codonF     : 2;
 my $testData = ( -d "$genomeData" )          ? $genomeData : "NA";
 if( $testData eq "NA" ) {
-    die "There's no genome data directory ($genomeData)\n\n".$helpBrief;
+    die "There's no genome data directory ($genomeData)\n\n" . $helpBrief;
 }
 else {
     print "Genome data to be found at $genomeData\n";
@@ -116,20 +116,38 @@ my $pwProg   = $pwProg =~ m{^($matchProg)$} ? lc($1) : $defPW;
 my $pwDB     = $workDir . "/$targetGnm";
 my $alnFile  = $pwDir   . "/$queryGnm/$targetGnm." . $pwProg . ".bz2";
 
+my $faaQuery
+    = -f "$genomeData/$queryGnm.faa.gz"  ? "$genomeData/$queryGnm.faa.gz"
+    : -f "$genomeData/$queryGnm.faa.bz2" ? "$genomeData/$queryGnm.faa.bz2"
+    : -f "$genomeData/$queryGnm.faa"     ? "$genomeData/$queryGnm.faa"
+    : "none";
+my $faaTarget
+    = -f "$genomeData/$targetGnm.faa.gz"  ? "$genomeData/$targetGnm.faa.gz"
+    : -f "$genomeData/$targetGnm.faa.bz2" ? "$genomeData/$targetGnm.faa.bz2"
+    : -f "$genomeData/$targetGnm.faa"     ? "$genomeData/$targetGnm.faa"
+    : "none";
+
 #### check if we have pairwise comparison results
 #### run pw comparison otherwise
 if( -f "$alnFile" ) {
     unless( my $good2go = checkAlignSeqs($alnFile) ) {
         print "comparing sequences with $pwProg\nwill save to $alnFile\n";
-        runPW("$genomeData/$queryGnm.faa",
-              "$genomeData/$targetGnm.faa",
+        if( $faaQuery eq "none" || $faaTarget eq "none" ) {
+            signalHandler("Missing faa files in $genomeData");
+        }
+        runPW("$faaQuery",
+              "$faaTarget",
               "$pwProg");
     }
 }
 else {
+    print "did not find $alnFile\n";
+    if( $faaQuery eq "none" || $faaTarget eq "none" ) {
+        signalHandler("Missing faa files in $genomeData");
+    }
     print "comparing sequences with $pwProg\nwill save to $alnFile\n";
-    runPW("$genomeData/$queryGnm.faa",
-          "$genomeData/$targetGnm.faa",
+    runPW("$faaQuery",
+          "$faaTarget",
           "$pwProg");
 }
 
@@ -434,6 +452,10 @@ sub produceDNAalignment {
 }
 
 sub signalHandler {
+    my $message = $_[0];
+    if( length("$message") > 0 ) {
+        print $message,"\n";
+    }
     if( -d "$workDir" ) {
         print "\n\tcleaning up ...\n";
         system "rm -r $workDir";
@@ -732,5 +754,6 @@ sub runPW {
     my $command
         = qq(getRBH.pl -q $queryFile -t $targetFile )
         . qq( -p $pwProg -a T -x 2);
+    print $command,"\n";
     my $pwOutput = qx($command);
 }

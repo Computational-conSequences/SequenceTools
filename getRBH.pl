@@ -451,9 +451,11 @@ if( $allvsall > 0 ) {
                     nakedName($faaQuery)," vs ",
                     nakedName($faaTarget),
                     " ($currentrun/$totalpairs runs)\n";
-                runPairWise("$faaQuery","$faaTarget","$maxAlns");
-                if( $runRBH eq 'T' ) {
-                    buildNrunRBH("$faaQuery","$faaTarget");
+                if( runPairWise("$faaQuery","$faaTarget","$maxAlns") ) {
+                    buildNrunRBH("$faaQuery","$faaTarget","F");
+                }
+                elsif( $runRBH eq 'T' ) {
+                    buildNrunRBH("$faaQuery","$faaTarget",$keepold);
                 }
             }
             $kept++;
@@ -493,9 +495,11 @@ else {
                     nakedName($faaQuery)," vs ",
                     nakedName($faaTarget),
                     " ($currentrun/$totalpairs runs)\n";
-                runPairWise("$faaQuery","$faaTarget","$maxAlns");
-                if( $runRBH eq 'T' ) {
-                    buildNrunRBH("$faaQuery","$faaTarget");
+                if( runPairWise("$faaQuery","$faaTarget","$maxAlns") ) {
+                    buildNrunRBH("$faaQuery","$faaTarget","F");
+                }
+                elsif( $runRBH eq 'T' ) {
+                    buildNrunRBH("$faaQuery","$faaTarget",$keepold);
                 }
             }
             $kept++;
@@ -536,20 +540,25 @@ sub runPairWise {
     if( -f "$alnFile" && $keepold =~ m{T|R}) {
         print "we already have an alignment file:\n $alnFile\n";
         print {$LOG} "we already have an alignment file:\n $alnFile\n";
+        return();
     }
     else {
         print "comparing sequences with $pwProg\n";
         if( $pwProg eq "blastp" ) {
             runBlastp("$faaQuery","$faaTarget","$alnFile","$maxAlns");
+            return(1);
         }
         elsif( $pwProg eq "diamond" ) {
             runDiamond("$faaQuery","$faaTarget","$alnFile","$maxAlns");
+            return(1);
         }
         elsif( $pwProg eq "mmseqs" ) {
             runMMseqs("$faaQuery","$faaTarget","$alnFile","$maxAlns");
+            return(1);
         }
         elsif( $pwProg eq "lastal" ) {
             runLastal("$faaQuery","$faaTarget","$alnFile","$maxAlns");
+            return(1);
         }
         else {
             print "no $pwProg program\n\n";
@@ -559,7 +568,7 @@ sub runPairWise {
 }
 
 sub buildNrunRBH {
-    my($faaQuery,$faaTarget) = @_;
+    my($faaQuery,$faaTarget,$keepold) = @_;
     my $queryGnm  = nakedName($faaQuery);
     my $targetGnm = nakedName($faaTarget);
     my $pwDB      = $tempFolder . "/$targetGnm";
@@ -571,7 +580,7 @@ sub buildNrunRBH {
     my $tRBHdir  = "$rbhDir/$targetGnm";
     my $qRBHfile = "$qRBHdir/$targetGnm.rbh.bz2";
     my $tRBHfile = "$tRBHdir/$queryGnm.rbh.bz2";
-    if( -f "$qRBHfile" && -f "$tRBHfile" && $keepold =~ m{T} ) {
+    if( -f "$qRBHfile" && -f "$tRBHfile" && $keepold eq "T" ) {
         print join("\n ","there is RBH files already:"
                        ,$qRBHfile,$tRBHfile),"\n";
     }
