@@ -22,7 +22,7 @@ my %url = (
     "blastp"  => 'ftp://ftp.ncbi.nlm.nih.gov/blast/executables/LATEST/',
     "diamond" => 'https://github.com/bbuchfink/diamond/releases',
     "mmseqs"  => 'https://github.com/soedinglab/MMseqs2/releases',
-    "lastal"  => 'http://last.cbrc.jp/',
+    "lastal"  => 'https://gitlab.com/mcfrith/last',
 );
 my @pwProgs = sort keys %url;
 my $matchProg = join("|",@pwProgs);
@@ -327,6 +327,7 @@ my @rbhHeading = qw(
                        Target
                        eValue
                        bitScore
+                       pident
                        qStart
                        qEnd
                        qCover
@@ -354,7 +355,7 @@ my @pwTbl = qw(
 ##### add alignments to blast results table?
 if( $alnSeqs eq "T" ) {
     if( $pwProg eq "diamond" ) {
-        push(@pwTbl,"qseq_gapped","sseq_gapped");
+        push(@pwTbl,"qseq","sseq");
     }
     else {
         push(@pwTbl,"qseq","sseq");
@@ -381,7 +382,7 @@ my @mmfields = qw(
              );
 ##### add alignments to mmseqs results table?
 if( $alnSeqs eq "T" ) {
-    push(@mmfields,"qseq","tseq");
+    push(@mmfields,"qaln","taln");
 }
 my $mmfields = join(",",@mmfields);
 
@@ -433,6 +434,7 @@ if( $allvsall > 0 ) {
     ##### each database is formatted only once
   TARGETAVA:
     while( my $faaTarget = pop @queries ) {
+        print "   checking target: $faaTarget\n";
         my $cntTargets = checkFasta("$faaTarget");
         my $maxAlns
             = $topMatch >= $minTop ? $topMatch
@@ -452,7 +454,9 @@ if( $allvsall > 0 ) {
                     nakedName($faaTarget),
                     " ($currentrun/$totalpairs runs)\n";
                 if( runPairWise("$faaQuery","$faaTarget","$maxAlns") ) {
-                    buildNrunRBH("$faaQuery","$faaTarget","F");
+                    if( $runRBH eq 'T' ) {
+                        buildNrunRBH("$faaQuery","$faaTarget","F");
+                    }
                 }
                 elsif( $runRBH eq 'T' ) {
                     buildNrunRBH("$faaQuery","$faaTarget",$keepold);
@@ -477,6 +481,7 @@ else {
     ##### each database is formatted only once
   TARGETQVA:
     while( my $faaTarget = shift @against ) {
+        print "   checking target: $faaTarget\n";
         my $cntTargets = checkFasta("$faaTarget");
         my $maxAlns
             = $topMatch >= $minTop ? $topMatch
@@ -496,7 +501,9 @@ else {
                     nakedName($faaTarget),
                     " ($currentrun/$totalpairs runs)\n";
                 if( runPairWise("$faaQuery","$faaTarget","$maxAlns") ) {
-                    buildNrunRBH("$faaQuery","$faaTarget","F");
+                    if( $runRBH eq 'T' ) {
+                        buildNrunRBH("$faaQuery","$faaTarget","F");
+                    }
                 }
                 elsif( $runRBH eq 'T' ) {
                     buildNrunRBH("$faaQuery","$faaTarget",$keepold);
@@ -534,12 +541,18 @@ sub runPairWise {
     my $targetGnm = nakedName($faaTarget);
     my $pwDB      = $tempFolder . "/$targetGnm";
     my $alnFile   = $pwDir . "/$queryGnm/$targetGnm." . $pwProg . ".bz2";
+    my $alnBack   = $pwDir . "/$targetGnm/$queryGnm." . $pwProg . ".bz2";
     print {$LOG} "working with $queryGnm and $targetGnm\n";
     ### check if we have pairwise comparison results
     ### decide if this should run
-    if( -f "$alnFile" && $keepold =~ m{T|R}) {
+    if( -f "$alnFile" && $keepold =~ m{T|R} ) {
         print "we already have an alignment file:\n $alnFile\n";
         print {$LOG} "we already have an alignment file:\n $alnFile\n";
+        return();
+    }
+    elsif( -f "$alnBack" && $keepold =~ m{T|R} ) {
+        print "we already have an alignment file:\n $alnBack\n";
+        print {$LOG} "we already have an alignment file:\n $alnBack\n";
         return();
     }
     else {
@@ -573,6 +586,7 @@ sub buildNrunRBH {
     my $targetGnm = nakedName($faaTarget);
     my $pwDB      = $tempFolder . "/$targetGnm";
     my $alnFile   = $pwDir . "/$queryGnm/$targetGnm." . $pwProg . ".bz2";
+    my $alnBack   = $pwDir . "/$targetGnm/$queryGnm." . $pwProg . ".bz2";
     #########################################################################
     ######### reciprocal best hits
     #########################################################################
@@ -589,79 +603,25 @@ sub buildNrunRBH {
         ## learn top homologs
         print "   learning top homologs\n";
         ##### first learn lines and their scores from query genome:
-        my %pair_query  = (); # obvious
-        my %pair_target = (); # obvious
-        my %pair_bitsc  = (); # capture bit score
-        my %pair_Evalue = (); # capture E-value
-        my %pair_line   = (); # capture line
-        my %identStats  = (); # capture stats for identical proteins
-        ##### check if coverage needs to be calculated
-        my $calcCover   = 0;
-        ##### open original homologs
-        open( my $IN,"-|","bzip2 -qdc $alnFile" );
-      HOMOLOGLINE:
-        while(<$IN>) {
-            if( m{^#} ) {
-                ##### check if coverage needs to be calculated
-                if( m{qLength}i ) {
-                    $calcCover++;
-                }
-                next HOMOLOGLINE;
-            }
-            my(
-                $query,$target,
-                $evalue,$bitscore,$pident,
-                $qstart,$qend,$qcov,
-                $sstart,$send,$scov,
-                $qalnseq,$salnseq
-            ) = split;
-            $query  = cleanID("$query");
-            $target = cleanID("$target");
-            ## percent coverages
-            if( $calcCover > 0 ) {
-                $qcov = calcCoverage($qstart,$qend,$qcov);
-                $scov = calcCoverage($sstart,$send,$scov);
-            }
-            if( ( $qcov >= $minCov ) || ( $scov >= $minCov ) ) {
-                my $pairF = join("\t",$query,$target);
-                my $pairR = join("\t",$target,$query);
-                my $stats = join("\t",
-                                 $evalue,$bitscore,
-                                 $qstart,$qend,$qcov,
-                                 $sstart,$send,$scov
-                             );
-                ######## are these identical?
-                if( ( $pident >= 100 )
-                        && ( $qcov >= 100 )
-                        && ( $scov >= 100 ) ) {
-                    $identStats{"$pairF"} = $stats;
-                    $identStats{"$pairR"} = $stats;
-                }
-                if( $bitscore > $pair_bitsc{"$pairF"} ) {
-                    $pair_line{"$pairF"}
-                        = join("\t",$query,$target,$stats);
-                    $pair_query{"$pairF"}  = $query;
-                    $pair_target{"$pairF"} = $target;
-                    $pair_bitsc{"$pairF"}  = $bitscore;
-                    $pair_Evalue{"$pairF"} = $evalue;
-                }
-            }
-        }
-        close($IN);
+        my (
+            $pairQuery,$pairTarget,
+            $pairBitSc,$pairEvalue,
+            $pairLine,$identStats
+        ) = extractTop("$alnFile","$alnBack");
         #### now sort, first bit-score (highest to lowest),
         #### then E value (lowest to highest), then query, then target
         my @query_lines = ();
         my @query_pairs
             = sort {
-                $pair_bitsc{"$b"} <=> $pair_bitsc{"$a"}
-                    || $pair_Evalue{"$a"} <=> $pair_Evalue{"$b"}
-                    || $pair_query{"$a"}  <=> $pair_query{"$b"}
-                    || $pair_query{"$a"}  cmp $pair_query{"$b"}
-                    || $pair_target{"$a"} <=> $pair_target{"$b"}
-                    || $pair_target{"$a"} cmp $pair_target{"$b"}
-                } keys %pair_query;
+                $pairBitSc->{"$b"} <=> $pairBitSc->{"$a"}
+                    || $pairEvalue->{"$a"} <=> $pairEvalue->{"$b"}
+                    || $pairQuery->{"$a"}  <=> $pairQuery->{"$b"}
+                    || $pairQuery->{"$a"}  cmp $pairQuery->{"$b"}
+                    || $pairTarget->{"$a"} <=> $pairTarget->{"$b"}
+                    || $pairTarget->{"$a"} cmp $pairTarget->{"$b"}
+                } keys %{ $pairQuery };
         for my $pair ( @query_pairs ) {
-            push(@query_lines,$pair_line{"$pair"});
+            push(@query_lines,$pairLine->{"$pair"});
         }
         #### now sort reciprocals
         my @reciprocal_lines = ();
@@ -672,23 +632,23 @@ sub buildNrunRBH {
             print "   learning reciprocals\n";
             my @pretend_reciprocal
                 = sort {
-                    $pair_bitsc{"$b"} <=> $pair_bitsc{"$a"}
-                        || $pair_Evalue{"$a"} <=> $pair_Evalue{"$b"}
-                        || $pair_target{"$a"} <=> $pair_target{"$b"}
-                        || $pair_target{"$a"} cmp $pair_target{"$b"}
-                        || $pair_query{"$a"}  <=> $pair_query{"$b"}
-                        || $pair_query{"$a"}  cmp $pair_query{"$b"}
-                    } keys %pair_query;
+                    $pairBitSc->{"$b"} <=> $pairBitSc->{"$a"}
+                        || $pairEvalue->{"$a"} <=> $pairEvalue->{"$b"}
+                        || $pairTarget->{"$a"} <=> $pairTarget->{"$b"}
+                        || $pairTarget->{"$a"} cmp $pairTarget->{"$b"}
+                        || $pairQuery->{"$a"}  <=> $pairQuery->{"$b"}
+                        || $pairQuery->{"$a"}  cmp $pairQuery->{"$b"}
+                    } keys %{ $pairQuery };
             for my $pair ( @pretend_reciprocal ) {
                 my (
                     $query,$target,
-                    $evalue,$bit_score,
+                    $evalue,$bit_score,$pident,
                     $q_start,$q_end,$qcov,
                     $s_start,$s_end,$scov
-                ) = split(/\t/,$pair_line{"$pair"});
+                ) = split(/\t/,$pairLine->{"$pair"});
                 my $oppLine = join("\t",
                                    $target,$query,
-                                   $evalue,$bit_score,
+                                   $evalue,$bit_score,$pident,
                                    $s_start,$s_end,$scov,
                                    $q_start,$q_end,$qcov
                                );
@@ -700,7 +660,7 @@ sub buildNrunRBH {
         ###### making this into a subroutine to allow working both ways:
         my $tmpQuery  = $tempFolder . "/$queryGnm.$targetGnm.rbh.bz2";
         produceRBH($tmpQuery,\@query_lines,\@reciprocal_lines,
-                   \%identStats);
+                   $identStats);
         if( -s "$tmpQuery" ) {
             for my $checkDir ( "$rbhDir","$qRBHdir" ) {
                 unless( -d "$checkDir" ) {
@@ -712,7 +672,7 @@ sub buildNrunRBH {
         if( "$queryGnm" ne "$targetGnm" ) {
             my $tmpTarget = $tempFolder . "/$targetGnm.$queryGnm.rbh.bz2";
             produceRBH($tmpTarget,\@reciprocal_lines,\@query_lines,
-                       \%identStats);
+                       $identStats);
             if( -s "$tmpTarget" ) {
                 for my $checkDir ( "$rbhDir","$tRBHdir" ) {
                     unless( -d "$checkDir" ) {
@@ -736,14 +696,14 @@ sub produceRBH {
     my %print_line      = ();
     for my $line ( @{$rqLines} ) {
         my ( $query,$target,
-             $evalue,$bit_score,
+             $evalue,$bit_score,$pident,
              $q_start,$q_end,$qcov,
              $s_start,$s_end,$scov
          ) = split(/\s+/,$line);
         my $pair = join("\t",$query,$target);
         my $print_line = join("\t",
                               $pair,
-                              $evalue,$bit_score,
+                              $evalue,$bit_score,$pident,
                               $q_start,$q_end,$qcov,
                               $s_start,$s_end,$scov
                           );
@@ -770,7 +730,7 @@ sub produceRBH {
     my %target_E_value   = ();
     for my $line ( @{$rsLines} ) {
         my ( $query,$target,
-             $evalue,$bit_score,
+             $evalue,$bit_score,$pident,
              $q_start,$q_end,$qcov,
              $s_start,$s_end,$scov
          ) = split(/\s+/,$line);
@@ -1024,14 +984,16 @@ sub formatDB {
         }
     }
     elsif( $dbType eq "lastal" ) {
-        if( -f "$dbfile.suf" ) {
+        if( -f "$dbfile.prj" ) {
             print "  the lastal DB file is already there\n";
         }
         else {
             print "producing lastalDB: $dbfile\n";
+                #= qq($opener $file | segmasker -outfmt fasta |)
+                #. qq( lastdb -p -P $cpus -c $dbfile );
             my $mklastalDB
-                = qq($opener $file | segmasker -outfmt fasta |)
-                . qq( lastdb -p -c $dbfile );
+                = qq($opener $file |)
+                . qq( lastdb -p -P $cpus $dbfile );
             print {$LOG} "building db:\n$mklastalDB\n";
             my $outdb = qx($mklastalDB 2>&1);
             print {$LOG} "$outdb";
@@ -1451,4 +1413,109 @@ sub cleanTMP {
         next ERASING if( $toErase =~ m{log$} );
         system "rm -r $tempFolder/$toErase &>/dev/null";
     }
+}
+
+sub extractTop {
+    my($forward,$backward) = @_;
+    my %pair_query  = (); # obvious
+    my %pair_target = (); # obvious
+    my %pair_bitsc  = (); # capture bit score
+    my %pair_Evalue = (); # capture E-value
+    my %pair_line   = (); # capture line
+    my %identStats  = (); # capture stats for identical proteins
+    ##### open original homologs
+    if( -f "$forward" ) {
+        print "    reading $forward\n";
+        open( my $IN,"-|","bzip2 -qdc $forward" );
+      FWLINE:
+        while(<$IN>) {
+            if( m{^#} ) {
+                next FWLINE;
+            }
+            my(
+                $query,$target,
+                $evalue,$bitscore,$pident,
+                $qstart,$qend,$qcov,
+                $sstart,$send,$scov,
+                $qalnseq,$salnseq
+            ) = split;
+            $query  = cleanID("$query");
+            $target = cleanID("$target");
+            ## percent coverages
+            if( ( $qcov >= $minCov ) || ( $scov >= $minCov ) ) {
+                my $pairF = join("\t",$query,$target);
+                my $pairR = join("\t",$target,$query);
+                my $stats = join("\t",
+                                 $evalue,$bitscore,$pident,
+                                 $qstart,$qend,$qcov,
+                                 $sstart,$send,$scov
+                             );
+                ######## are these identical?
+                if( ( $pident >= 100 )
+                    && ( $qcov >= 100 )
+                    && ( $scov >= 100 ) ) {
+                    $identStats{"$pairF"} = $stats;
+                    $identStats{"$pairR"} = $stats;
+                }
+                if( $bitscore > $pair_bitsc{"$pairF"} ) {
+                    $pair_line{"$pairF"}
+                        = join("\t",$query,$target,$stats);
+                    $pair_query{"$pairF"}  = $query;
+                    $pair_target{"$pairF"} = $target;
+                    $pair_bitsc{"$pairF"}  = $bitscore;
+                    $pair_Evalue{"$pairF"} = $evalue;
+                }
+            }
+        }
+        close($IN);
+    }
+    if( -f "$backward"
+        && "$forward" ne "$backward" ) {
+        print "    reading $backward\n";
+        open( my $IN,"-|","bzip2 -qdc $backward" );
+      BWLINE:
+        while(<$IN>) {
+            if( m{^#} ) {
+                next BWLINE;
+            }
+            my(
+                $target,$query,
+                $evalue,$bitscore,$pident,
+                $sstart,$send,$scov,
+                $qstart,$qend,$qcov,
+                $salnseq,$qalnseq
+            ) = split;
+            $query  = cleanID("$query");
+            $target = cleanID("$target");
+            ## percent coverages
+            if( ( $qcov >= $minCov ) || ( $scov >= $minCov ) ) {
+                my $pairF = join("\t",$query,$target);
+                my $pairR = join("\t",$target,$query);
+                my $stats = join("\t",
+                                 $evalue,$bitscore,$pident,
+                                 $qstart,$qend,$qcov,
+                                 $sstart,$send,$scov
+                             );
+                ######## are these identical?
+                if( ( $pident >= 100 )
+                    && ( $qcov >= 100 )
+                    && ( $scov >= 100 ) ) {
+                    $identStats{"$pairF"} = $stats;
+                    $identStats{"$pairR"} = $stats;
+                }
+                if( $bitscore > $pair_bitsc{"$pairF"} ) {
+                    $pair_line{"$pairF"}
+                        = join("\t",$query,$target,$stats);
+                    $pair_query{"$pairF"}  = $query;
+                    $pair_target{"$pairF"} = $target;
+                    $pair_bitsc{"$pairF"}  = $bitscore;
+                    $pair_Evalue{"$pairF"} = $evalue;
+                }
+            }
+        }
+        close($IN);
+    }
+    return( \%pair_query, \%pair_target,
+            \%pair_bitsc, \%pair_Evalue,
+            \%pair_line,  \%identStats );
 }
