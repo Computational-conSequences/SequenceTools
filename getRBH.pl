@@ -185,6 +185,7 @@ print "sorting by file length = $lengthsort\n";
 
 ### check if working with all-vs-all directory
 my $allvsall = length($faaDir) > 0 ? 1 : 0;
+my $bothways = $allvsall == 1 ? 'F' : 'T';
 if( $allvsall == 0 ) {
     if( !$queries[0] || !$against[0] ) {
         podhelp("if not -d I need both query and target files");
@@ -355,7 +356,7 @@ my @pwTbl = qw(
 ##### add alignments to blast results table?
 if( $alnSeqs eq "T" ) {
     if( $pwProg eq "diamond" ) {
-        push(@pwTbl,"qseq","sseq");
+        push(@pwTbl,"qseq_gapped","sseq_gapped");
     }
     else {
         push(@pwTbl,"qseq","sseq");
@@ -397,13 +398,14 @@ my $blastOptions
 
 my $diamondOptions
     = qq( --evalue $maxEvalue )
-    . qq( --masking 0 )
+    . qq( --masking none )
+    . qq( --soft-masking tantan )
     . qq( --comp-based-stats 0 )
     . qq( --threads $cpus )
     . qq( --tmpdir $tempFolder )
-    . qq( -c 1 )
     . qq( --quiet )
     . qq( --outfmt $dmdTbl );
+
 if( $dmdmode =~ m{sensitive} ) {
     $diamondOptions = qq( --$dmdmode ) . $diamondOptions;
 }
@@ -455,7 +457,7 @@ if( $allvsall > 0 ) {
                     " ($currentrun/$totalpairs runs)\n";
                 if( runPairWise("$faaQuery","$faaTarget","$maxAlns") ) {
                     if( $runRBH eq 'T' ) {
-                        buildNrunRBH("$faaQuery","$faaTarget","F");
+                        buildNrunRBH("$faaQuery","$faaTarget");
                     }
                 }
                 elsif( $runRBH eq 'T' ) {
@@ -502,7 +504,7 @@ else {
                     " ($currentrun/$totalpairs runs)\n";
                 if( runPairWise("$faaQuery","$faaTarget","$maxAlns") ) {
                     if( $runRBH eq 'T' ) {
-                        buildNrunRBH("$faaQuery","$faaTarget","F");
+                        buildNrunRBH("$faaQuery","$faaTarget");
                     }
                 }
                 elsif( $runRBH eq 'T' ) {
@@ -540,9 +542,22 @@ sub runPairWise {
     my $queryGnm  = nakedName($faaQuery);
     my $targetGnm = nakedName($faaTarget);
     my $pwDB      = $tempFolder . "/$targetGnm";
-    my $alnFile   = $pwDir . "/$queryGnm/$targetGnm." . $pwProg . ".bz2";
-    my $alnBack   = $pwDir . "/$targetGnm/$queryGnm." . $pwProg . ".bz2";
+    my $homFile   = $pwDir . "/$queryGnm/$targetGnm.hom.bz2";
+    my $alnFile
+        = ( -f $homFile ) ? $homFile
+        : $pwDir . "/$queryGnm/$targetGnm." . $pwProg . ".bz2";
     print {$LOG} "working with $queryGnm and $targetGnm\n";
+    if( $bothways eq 'F' ) {
+        my $homBack   = $pwDir . "/$targetGnm/$queryGnm.hom.bz2";
+        my $alnBack
+            = ( -f $homBack ) ? $homBack
+            : $pwDir . "/$targetGnm/$queryGnm." . $pwProg . ".bz2";
+        if( -f "$alnBack" && $keepold =~ m{T|R} ) {
+            print "we already have an alignment file:\n $alnBack\n";
+            print {$LOG} "we already have an alignment file:\n $alnBack\n";
+            return();
+        }
+    }
     ### check if we have pairwise comparison results
     ### decide if this should run
     if( -f "$alnFile" && $keepold =~ m{T|R} ) {
@@ -550,28 +565,47 @@ sub runPairWise {
         print {$LOG} "we already have an alignment file:\n $alnFile\n";
         return();
     }
-    elsif( -f "$alnBack" && $keepold =~ m{T|R} ) {
-        print "we already have an alignment file:\n $alnBack\n";
-        print {$LOG} "we already have an alignment file:\n $alnBack\n";
-        return();
-    }
     else {
         print "comparing sequences with $pwProg\n";
         if( $pwProg eq "blastp" ) {
-            runBlastp("$faaQuery","$faaTarget","$alnFile","$maxAlns");
-            return(1);
+            if(
+                runBlastp("$faaQuery","$faaTarget","$alnFile","$maxAlns")
+            ) {
+                return(1);
+            }
+            else {
+                return();
+            }
         }
         elsif( $pwProg eq "diamond" ) {
-            runDiamond("$faaQuery","$faaTarget","$alnFile","$maxAlns");
-            return(1);
+            if(
+                runDiamond("$faaQuery","$faaTarget","$alnFile","$maxAlns")
+            ) {
+                return(1);
+            }
+            else {
+                return();
+            }
         }
         elsif( $pwProg eq "mmseqs" ) {
-            runMMseqs("$faaQuery","$faaTarget","$alnFile","$maxAlns");
-            return(1);
+            if(
+                runMMseqs("$faaQuery","$faaTarget","$alnFile","$maxAlns")
+            ) {
+                return(1);
+            }
+            else {
+                return();
+            }
         }
         elsif( $pwProg eq "lastal" ) {
-            runLastal("$faaQuery","$faaTarget","$alnFile","$maxAlns");
-            return(1);
+            if(
+                runLastal("$faaQuery","$faaTarget","$alnFile","$maxAlns")
+            ) {
+                return(1);
+            }
+            else {
+                return();
+            }
         }
         else {
             print "no $pwProg program\n\n";
@@ -581,12 +615,18 @@ sub runPairWise {
 }
 
 sub buildNrunRBH {
-    my($faaQuery,$faaTarget,$keepold) = @_;
+    my($faaQuery,$faaTarget) = @_;
     my $queryGnm  = nakedName($faaQuery);
     my $targetGnm = nakedName($faaTarget);
     my $pwDB      = $tempFolder . "/$targetGnm";
-    my $alnFile   = $pwDir . "/$queryGnm/$targetGnm." . $pwProg . ".bz2";
-    my $alnBack   = $pwDir . "/$targetGnm/$queryGnm." . $pwProg . ".bz2";
+    my $homFile   = $pwDir . "/$queryGnm/$targetGnm.hom.bz2";
+    my $alnFile
+        = ( -f $homFile ) ? $homFile
+        : $pwDir . "/$queryGnm/$targetGnm." . $pwProg . ".bz2";
+    my $homBack   = $pwDir . "/$targetGnm/$queryGnm.hom.bz2";
+    my $alnBack
+        = ( -f $homBack ) ? $homBack
+        : $pwDir . "/$targetGnm/$queryGnm." . $pwProg . ".bz2";
     #########################################################################
     ######### reciprocal best hits
     #########################################################################
@@ -917,17 +957,6 @@ sub how2open {
     }
 }
 
-sub inflateFile {
-    my $origfile = $_[0];
-    my( $opener ) = how2open("$origfile");
-    my $rootName = nakedName("$origfile");
-    my $inflated = "$tempFolder/$rootName.faa";
-    unless( -f "$inflated" ) {
-        system("$opener $origfile > $inflated");
-    }
-    return("$inflated");
-}
-
 sub formatDB {
     my($file,$dbfile,$dbType) = @_;
     my($opener) = how2open("$file");
@@ -1077,7 +1106,9 @@ sub runBlastp {
     }
     else {
         print "   blastp failed (empty file)\n";
-        signalHandler();
+        unlink("$tmpOut");
+        return();
+        #signalHandler();
     }
 }
 
@@ -1120,7 +1151,9 @@ sub runDiamond {
     }
     else {
         print "   diamond failed (empty file)\n";
-        signalHandler();
+        unlink("$tmpOut");
+        return();
+        #signalHandler();
     }
 }
 
@@ -1182,7 +1215,9 @@ sub runMMseqs {
     }
     else {
         print "   mmseqs failed (empty file)\n";
-        signalHandler();
+        unlink("$tmpOut");
+        return();
+        #signalHandler();
     }
 }
 
@@ -1245,7 +1280,9 @@ sub runLastal {
     }
     else {
         print "   lastal failed (empty file)\n";
-        signalHandler();
+        unlink("$tmpOut");
+        return();
+        #signalHandler();
     }
 }
 
@@ -1367,7 +1404,8 @@ sub checkSoftware {
 
 sub podhelp {
     my $extraMessage = $_[0];
-    open( my $PIPE,"|-","less -wiseMR" );
+    #open( my $PIPE,"|-","less -wiseMR" );
+    open( my $PIPE,"|-","cat" );
     if( length "$extraMessage" > 2 ) {
         print {$PIPE} $extraMessage,"\n\n";
     }

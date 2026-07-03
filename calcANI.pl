@@ -10,25 +10,23 @@ my $ownName = $0;
 $ownName =~ s{.*/}{};
 
 my %url = (
-    "ANIx" => 'ftp://ftp.ncbi.nlm.nih.gov/blast/executables/LATEST/',
+    "ANIx" => "https://gitlab.com/mcfrith/last",
     "ANIp" => 'ftp://ftp.ncbi.nlm.nih.gov/blast/executables/LATEST/',
-    "ANIb" => 'ftp://ftp.ncbi.nlm.nih.gov/blast/executables/legacy.NOTSUPPORTED/2.2.26/',
     "ANIm" => 'https://github.com/mummer4/mummer/releases/',
     "ANIf" => 'https://github.com/ParBLiSS/FastANI/releases/',
-    "ANIl" => 'http://last.cbrc.jp/',
-    "ANIu" => 'https://www.drive5.com/usearch/',
+    "ANIl" => "https://gitlab.com/mcfrith/last",
+    "ANIb" => 'ftp://ftp.ncbi.nlm.nih.gov/blast/executables/legacy.NOTSUPPORTED/2.2.26/',
 );
 my @methods = sort keys %url;
 my $methods = join("|",@methods);
 
 my %pwProg = (
-    "ANIx" => 'blastp',
-    "ANIp" => 'blastp',
+    "ANIp" => 'blastn',
     "ANIb" => 'blastall',
     "ANIm" => 'nucmer',
     "ANIf" => 'fastANI',
     "ANIl" => 'lastal',
-    "ANIu" => 'usearch',
+    "ANIx" => 'lastal',
 );
 
 ######## check for software to calculate ANI:
@@ -69,7 +67,6 @@ if( $availCount < 1 ) {
 
 my %needCuts = (
     "ANIb" => 1,
-    "ANIu" => 1,
     "ANIl" => 1,
     "ANIp" => 1,
 );
@@ -91,10 +88,9 @@ my $minLn      = 1000;
 my $maxLn      = 3000;
 my $defaultLn  = 1020;
 my $defaultANI
-    = exists $available{"ANIf"} ? "ANIf"
-    : exists $available{"ANIx"} ? "ANIx"
-    : exists $available{"ANIm"} ? "ANIm"
+    = exists $available{"ANIx"} ? "ANIx"
     : exists $available{"ANIp"} ? "ANIp"
+    : exists $available{"ANIm"} ? "ANIm"
     : $available[0];
 ####### setting program arguments:
 my @queries    = ();
@@ -108,6 +104,7 @@ my $keepold    = 'T';
 ####### when working on all vs all we use a
 ####### number of files for batch work:
 my $batch      = 200;
+my $runback    = 'F';
 
 my $helpMsg
     = qq(about:\n)
@@ -124,18 +121,20 @@ my $helpMsg
     . qq(   -d directory with fna files for all-vs-all, no default,\n)
     . qq(       if set, -i and -t will be ignored\n)
     . qq(   -m method [$methods], default $defaultANI\n)
-    . qq(       ANIx: our blast+ reinterpretation (megablast)\n)
+    . qq(       ANIx: our lastal interpretation (fastest)\n)
     . qq(       ANIp: our blast+ implementation of original method (slow)\n)
     . qq(       ANIb: original method using legacy blast (slowest)\n)
     . qq(             https://www.doi.org/10.1099/ijs.0.64483-0\n)
-    . qq(       ANIm: mummer method (using nucmer)\n)
+    . qq(       ANIm: mummer method (using nucmer). Fails for alignments\n)
+    . qq(             below 80% identity\n)
     . qq(             https://www.doi.org/10.1073/pnas.0906412106\n)
     . qq(       ANIf: fastANI method\n)
     . qq(             https://www.doi.org/10.1038/s41467-018-07641-9\n)
-    . qq(       ANIl: our lastal implementation\n)
-    . qq(       ANIu: our ublast implementation\n)
-    . qq(   -c fragment length (not used in ANIx, or ANIm),\n)
+    . qq(       ANIl: our lastal implementation of original method\n)
+    . qq(   -c fragment length (not used in ANIx and ANIm),\n)
     . qq(       minimum $minLn, maximum $maxLn default $defaultLn\n)
+    . qq(   -r run both sides (genome1-genome2, genome2-genome1) [T|F],\n)
+    . qq(       default $runback\n)
     . qq(   -o output folder, default ResultsANI\n)
     . qq(   -k keep prior result [T|F], default 'T'. If 'T' prior results\n)
     . qq(       will be taken from appropriate files in the output folder\n)
@@ -158,6 +157,7 @@ my $options = GetOptions(
     "c=i"    => \$cutLn,
     "o=s"    => \$resultsDir,
     "k=s"    => \$keepold,
+    "r=s"    => \$runback,
     "x=i"    => \$cpus,
 ) or die "$helpMsg";
 
@@ -203,7 +203,10 @@ else {
     }
 }
 
-my $method = $method =~ m{($methods)} ? $1 : $defaultANI;
+my $method
+    = $method =~ m{($methods)}i ? uc($1)
+    : die "$method is invalid [$methods]\n";
+$method =~ s{(\w)$}{lc($1)}e;
 if( exists $missing{"$method"} ) {
     my $msgOut
         = qq(The $method method needs missing software:\n)
@@ -221,6 +224,8 @@ my $keepold = $keepold =~ m{^(T|F)$}i ? uc($1) : 'T';
 print "keeping old results if there's any: $keepold\n";
 my $cpus    = $cpus > 0 && $cpus <= $cpuNumber ? $cpus : $defCPUs;
 print "using $cpus threads\n";
+my $runback = $runback =~ m{^(T|F)$}i ? uc($1) : 'F';
+print "running calculations both ways: $runback\n";
 my $maxEvalue = 1e-3;
 my $round     = 2;
 
@@ -233,15 +238,16 @@ my $tempFolder = tempdir("/tmp/$method.XXXXXXXXXXXX");
 print "will save ANI results in the $resultsDir folder\n";
 my $qnaked = nakedName($queries[0]);
 my $aniout
-    = $allvsall > 0 ? "AllvsAll.$method.tbl"
-    : "$qnaked.$method.tbl";
+    = $allvsall > 0 ? "AllvsAll.$method.tsv"
+    : "$qnaked.$method.tsv";
 $aniout = join("/",$resultsDir,$aniout);
 my %prevANI = ();
 if( -d "$resultsDir" ) {
     print "ensuring prior result files survival\n";
     opendir( my $PRIORD,"$resultsDir" );
     my @priorFiles = grep { m{\.$method\.} } readdir($PRIORD);
-    if( $keepold eq 'T' ) {
+    my $cprior = @priorFiles;
+    if( $cprior > 0 && $keepold eq 'T' ) {
         my $saveFile = "prior.$method.backup";
         open( my $PRESERVE,">","$tempFolder/$saveFile" );
         print {$PRESERVE} join("\t","Genome1","Genome2",
@@ -359,21 +365,20 @@ sub proceedwQT {
     my $ani1
         = $method eq "ANIb" ? calcANIb($query,$against)
         : $method eq "ANIf" ? calcANIf($query,$against)
-        : $method eq "ANIu" ? calcANIu($query,$against)
         : $method eq "ANIl" ? calcANIl($query,$against)
-        : $method eq "ANIm" ? calcANIm($query,$against)
         : $method eq "ANIp" ? calcANIp($query,$against)
-        : calcANIx($query,$against);
+        : $method eq "ANIm" ? calcANIm($query,$against)
+        : $method eq "ANIx" ? calcANIx($query,$against)
+        : "NA" ;
     my $ani2
-        = $query eq $against ? $ani1
+        = $runback eq 'F'    ? $ani1
+        : $query eq $against ? $ani1
         : $method eq "ANIb"  ? calcANIb($against,$query)
         : $method eq "ANIf"  ? calcANIf($against,$query)
-        : $method eq "ANIu"  ? calcANIu($against,$query)
         : $method eq "ANIl"  ? calcANIl($against,$query)
         : $method eq "ANIp"  ? calcANIp($against,$query)
-        : $ani1; ### both ANIm and ANIx are reciprocal
-        #: $method eq "ANIm" ? calcANIm($against,$query)
-        #: calcANIx($against,$query);
+        : $method eq "ANIx"  ? calcANIx($against,$query)
+        : $ani1; ### ANIm is reciprocal
     ######## fix results if in trouble:
     if( $ani1 eq '' ) {
         $ani1 = 'NA';
@@ -400,61 +405,6 @@ sub proceedwQT {
 ######################## ANI subroutines ########################
 #################################################################
 
-########## our blast+ reinterpretation
-sub calcANIx {
-    my($qfile,$sfile) = @_;
-    my $qLarge = inflateFile("$qfile");
-    my $dbfile = nameDB("$sfile");
-    formatDB("$sfile","$dbfile","blast");
-    my $action = "plusblasting";
-    my $addSpace = " " x ( length($action) - 3 );
-    print "$action $qfile\n${addSpace} vs $dbfile\n";
-    my @table = qw(
-                      6
-                      qaccver
-                      saccver
-                      pident
-                      qstart
-                      qend
-                      length
-              );
-    #### megablast is the default task, but we're making it explicit
-    my $blastrun
-        = qq(blastn -query $qLarge -db $dbfile)
-        . qq( -outfmt ') . join(" ",@table) . qq(')
-        . qq( -evalue $maxEvalue )
-        . qq( -dust no )
-        . qq( -xdrop_gap 150 )
-        . qq( -penalty -1 )
-        . qq( -reward 1 )
-        . qq( -gapopen 5 )
-        . qq( -gapextend 2 )
-        . qq( -num_threads $cpus )
-        . qq( -task megablast )
-        ;
-    my $totalLn = 0;
-    my $totalId = 0;
-    my @acceptedCoords  = ();
-  XLINE:
-    for my $line ( qx($blastrun) ) {
-        chomp($line);
-        my($qid,$sid,$pident,
-           $qstart,$qend,
-           $ln) = split(/\t/,$line);
-        next XLINE if( $ln < $cutLn );
-        $totalLn += $ln;
-        $totalId += ($ln * ($pident/100));
-    }
-    if( $totalLn > 0 ) {
-        my $ani = sprintf("%.${round}f",100*($totalId/$totalLn));
-        print "ANI is $ani\n";
-        return($ani);
-    }
-    else {
-        return();
-    }
-}
-
 ########## ANI as described in article (Kostas program), but with blast+
 sub calcANIp {
     my($query,$sfile) = @_;
@@ -468,9 +418,9 @@ sub calcANIp {
                       6
                       qaccver
                       saccver
-                      pident
+                      nident
+                      length
               );
-    #                  nident
     my $blastrun
         = qq(blastn -query $qfile -db $dbfile)
         . qq( -outfmt ') . join(" ",@table) . qq(')
@@ -479,7 +429,7 @@ sub calcANIp {
         . qq( -max_hsps 1 )
         . qq( -max_target_seqs 1 )
         . qq( -qcov_hsp_perc 70 )
-        . qq( -perc_identity 70 )
+        . qq( -perc_identity 30 )
         . qq( -xdrop_gap 150 )
         . qq( -penalty -1 )
         . qq( -reward 1 )
@@ -488,23 +438,16 @@ sub calcANIp {
         . qq( -num_threads $cpus )
         . qq( -task blastn )
         ;
-    #    . qq( -perc_identity 30 )
-    my @pcids = ();
+    my $totalLn = 0;
+    my $totalId = 0;
     for my $line ( qx($blastrun) ) {
         chomp($line);
-        #my($qid,$sid,$pident,$ident) = split(/\s+/,$line);
-        my($qid,$sid,$pident) = split(/\t/,$line);
-        push(@pcids,$pident);
-        ####### if we wanted something as described in paper:
-        # my $pcid = 100 * ( $ident / $cutLn );
-        # if( $pcid > 30 ) {
-        #     push(@pcids,$pcid);
-        # }
+        my($qid,$sid,$nident,$length) = split(/\t/,$line);
+        $totalLn += $length;
+        $totalId += $nident;
     }
-    my $count = @pcids;
-    my $total = sum(@pcids);
-    if( $count > 0 ) {
-        my $ani = sprintf("%.${round}f",($total/$count));
+    if( $totalLn > 0 ) {
+        my $ani = sprintf("%.${round}f",( 100 * ( $totalId / $totalLn ) ) );
         print "ANI is $ani\n";
         return($ani);
     }
@@ -554,7 +497,7 @@ sub calcANIb {
     my $total = sum(@pidents);
     my $count = @pidents;
     if( $count > 0 ) {
-        my $ani = sprintf("%.${round}f",($total/$count));
+        my $ani = sprintf( "%.${round}f",( $total / $count) );
         print "ANI is $ani\n";
         return($ani);
     }
@@ -581,16 +524,32 @@ sub calcANIm {
     my $totalLn = 0;
     my $totalId = 0;
     my $ani     = 0;
-    my $getANI = 'no';
+    my $getANI  = 'no';
+    my $totalq  = 0;
+    my $totalt  = 0;
     open( my $DIFF,"<","$outfile.report" );
   READDIFF:
     while(<$DIFF>) {
+        if( m{^TotalBases} ) {
+            my($caca,$tq,$tt) = split;
+            $totalq = $tq;
+            $totalt = $tt;
+        }
+        if( m{^AlignedBases} ) {
+            my($caca,$qa,$ta) = split;
+            $qa =~ s{\(\S+}{};
+            $ta =~ s{\(\S+}{};
+            if( ( $qa / $totalq ) < 0.5 ) {
+                $ani = sprintf("%.${round}f",20);
+                last READDIFF;
+            }
+        }
         if( $getANI eq 'yes' && m{^AvgIdentity} ) {
             my($label,$ani1,$ani2) = split;
             $ani = sprintf("%.${round}f",( ( $ani1 + $ani2 ) / 2 ) );
             last READDIFF;
         }
-        if( m{^M-to-M\s+} ) {
+        if( m{^1-to-1\s+} ) {
             $getANI = 'yes';
         }
     }
@@ -606,45 +565,52 @@ sub calcANIm {
 
 sub calcANIl {
     my($query,$sfile) = @_;
-    my $qfile = namePieces("$query");
+    my $qfile  = namePieces("$query");
     my $dbfile = nameDB("$sfile");
     formatDB("$sfile","$dbfile","lastal");
     my $action = "lastaling";
     my $addSpace = " " x ( length($action) - 3 );
     print "$action $qfile\n${addSpace} vs $dbfile\n";
+    ##### -R 00 for non-masked
     my $lastrun
         = qq(lastal)
         . qq( -N 1 )
         . qq( -f BlastTab )
         . qq( -P $cpus )
         . qq( -q 1 )
+        . qq( -R 00 )
         . qq( $dbfile $qfile )
         ;
     my $thrLn  = $cutLn * 0.7;
     #print "cutting unless length > $thrLn\n";
     my %pident = ();
+    my %nident = ();
+    my %length = ();
   LASTLINE:
     for my $line ( qx($lastrun) ) {
         chomp($line);
         next LASTLINE if( m{^#} );
-        my($qaccver,$saccver,
-           $pident,$length,$mismatch,$gapopen,
-           $qstart,$qend,
-           $sstart,$send,
-           $evalue,$bitscore) = split(/\t/,$line);
+        my ($qaccver,$saccver,
+            $pident,$length,
+            $mismatch,$gapopen,
+            $qstart,$qend,
+            $sstart,$send,
+            $evalue,$bitscore
+        ) = split(/\t/,$line);
         next LASTLINE if( $evalue > $maxEvalue );
         ######## filtered as in 2007 ANI paper
         if( $length > $thrLn ## 700 in paper
                 && $pident > 30
                 && $pident > $pident{"$qaccver"} ) {
+            $length{"$qaccver"} = $length;
             $pident{"$qaccver"} = $pident;
+            $nident{"$qaccver"} = $length * $pident / 100;
         }
     }
-    my @pidents = values %pident;
-    my $total = sum(@pidents);
-    my $count = @pidents;
-    if( $count > 0 ) {
-        my $ani = sprintf("%.${round}f",($total/$count));
+    my $tlength = sum( values %length );
+    my $tident  = sum( values %nident );
+    if( $tlength > 0 ) {
+        my $ani = sprintf("%.${round}f",( 100 * ($tident/$tlength) ) );
         print "ANI is $ani\n";
         return($ani);
     }
@@ -653,47 +619,47 @@ sub calcANIl {
     }
 }
 
-sub calcANIu {
-    my($query,$sfile) = @_;
-    my $qfile = namePieces("$query");
-    my $sLarge = inflateFile("$sfile");
-    my $action = "ublasting";
+########## our full lastal reinterpretation
+sub calcANIx {
+    my($qfile,$sfile) = @_;
+    my $qLarge = inflateFile("$qfile");
+    my $dbfile = nameDB("$sfile");
+    formatDB("$sfile","$dbfile","lastal");
+    my $action = "lastaling";
     my $addSpace = " " x ( length($action) - 3 );
-    print "$action $qfile\n${addSpace} vs $sLarge\n";
-    my @table = qw(
-                      query
-                      target
-                      pctpv
-              );
-    #                  pv
-    my $outfile = nakedName("$query") . "." . nakedName("$sfile");
-    $outfile = join("/",$tempFolder,$outfile);
-    my $ublaster
-        = qq(usearch -ublast $qfile -db $sLarge -quiet )
-        . qq( -qmask none -dbmask none )
-        . qq( -evalue $maxEvalue -accel 0.5 )
-        . qq( -query_cov 0.70 )
-        . qq( -id 0.30 )
-        . qq( -threads $cpus )
-        . qq( -strand both )
-        . qq( -userout $outfile )
-        . qq( -userfields ) . join("+",@table);
-    my $outErr = qx($ublaster);
-    my %pcid = ();
-    open( my $UBLASTED,"<","$outfile" );
-    while(<$UBLASTED>) {
-        chomp;
-        my($qid,$sid,$pcid) = split(/\t/,$_);
-        if( $pcid > $pcid{"$qid"} ) {
-            $pcid{"$qid"} = $pcid;
-        }
+    print "$action $qLarge\n${addSpace} vs $dbfile\n";
+    ##### -R 00 for non-masked
+    my $lastrun
+        = qq(lastal )
+        . qq( -P $cpus )
+        #. qq( -q 1 )
+        . qq( -K 1 -C 1 )
+        . qq( -R 00 )
+        #. qq( --split )
+        . qq( $dbfile $qLarge )
+        . qq(| last-split -r )
+        ;
+    my $thrLn  = $cutLn * 0.7;
+    #print "cutting unless length > $thrLn\n";
+    my $tident  = ();
+    my $tlength = ();
+  LASTLINE:
+    for my $line ( qx($lastrun | maf-convert blasttab ) ) {
+        chomp($line);
+        next LASTLINE if( m{^#} );
+        my ($qaccver,$saccver,
+            $pident,$length,
+            $mismatch,$gapopen,
+            $qstart,$qend,
+            $sstart,$send,
+            $evalue,$bitscore
+        ) = split(/\t/,$line);
+        #next LASTLINE if( $evalue > $maxEvalue );
+        $tlength += $length;
+        $tident  += $length * $pident / 100;
     }
-    close($UBLASTED);
-    my @pcids = values %pcid;
-    my $total = sum(@pcids);
-    my $count = @pcids;
-    if( $count > 0 ) {
-        my $ani = sprintf("%.${round}f",($total/$count));
+    if( $tlength > 0 ) {
+        my $ani = sprintf("%.${round}f",( 100 * ($tident/$tlength) ) );
         print "ANI is $ani\n";
         return($ani);
     }
@@ -872,7 +838,6 @@ sub formatDB {
                 . qq( -title $dbfile )
                 . qq( -out $dbfile );
             system("$mkblastdb 1>/dev/null");
-            #system("makembindex -input $dbfile");
         }
     }
     else { ### lastal for now
@@ -973,4 +938,3 @@ sub checkFasta {
     close($CFA);
     return($cntSeqs);
 }
-
